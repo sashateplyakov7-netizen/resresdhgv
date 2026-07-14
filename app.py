@@ -41,7 +41,7 @@ def webhook():
             "chat_id": chat_id,
             "text": answer
         },
-        timeout=30
+        timeout=120
     )
 
     return "ok", 200
