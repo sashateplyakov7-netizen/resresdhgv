@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: telegram-flowise
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn bot:app
