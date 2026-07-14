@@ -21,7 +21,7 @@ def webhook():
         response = requests.post(
             FLOWISE_URL,
             json={"question": text},
-            timeout=30
+            timeout=120
         )
 
         print("Flowise status:", response.status_code)
