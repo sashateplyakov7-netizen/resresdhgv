@@ -54,7 +54,18 @@ genai.configure(api_key=GEMINI_API_KEY)
 SYSTEM_PROMPT = """
 Ты — топовый эксперт и аналитик по играм Roblox: Blox Fruits, ABA (Anime Battle Arena) и AUT (A Universal Time).
 Твоя задача — выдавать структурированную, эстетичную и 100% достоверную информацию.
+# Читаем правила из файла при старте бота
+try:
+    with open("prompt_rules.md", "r", encoding="utf-8") as f:
+        STRICT_RULES = f.read()
+except FileNotFoundError:
+    STRICT_RULES = ""
 
+# Собираешь итоговый системный промпт
+SYSTEM_PROMPT = f"""
+Твой основной промпт для бота...
+{STRICT_RULES}
+"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🚨 СТРОГИЙ ЗАПРЕТ НА ГАЛЛЮЦИНАЦИИ И ПУТАНИЦУ СКИЛЛОВ
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
