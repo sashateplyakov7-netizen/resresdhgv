@@ -1,3 +1,4 @@
+```python
 import asyncio
 import os
 import sys
@@ -16,11 +17,26 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-import google.generativeai as genai
 from bs4 import BeautifulSoup
 import requests
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# ==========================================
+# ПЕРЕМЕННЫЕ ДЛЯ OPENROUTER
+# ==========================================
+USE_OPENROUTER = os.getenv("USE_OPENROUTER", "False").lower() == "true"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-3.1-flash-lite")
+
+if USE_OPENROUTER:
+    from openai import OpenAI
+    openrouter_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+    )
+else:
+    import google.generativeai as genai
 
 # ==========================================
 # КЭШИ И ГЛОБАЛЬНЫЕ ДАННЫЕ
@@ -111,7 +127,7 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==========================================
-# ЗАГРУЗКА .env И НАСТРОЙКА GEMINI
+# ЗАГРУЗКА .env И НАСТРОЙКА МОДЕЛИ
 # ==========================================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -122,24 +138,40 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 PRIORITY_USERS.append(ADMIN_ID)
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logging.error("❌ Не найдены TELEGRAM_TOKEN или GEMINI_API_KEY")
+if not TELEGRAM_TOKEN:
+    logging.error("❌ Не найден TELEGRAM_TOKEN")
     exit(1)
 
-genai.configure(api_key=GEMINI_API_KEY)
+if not USE_OPENROUTER and not GEMINI_API_KEY:
+    logging.error("❌ Не найден GEMINI_API_KEY (или включи USE_OPENROUTER)")
+    exit(1)
+
+if USE_OPENROUTER and not OPENROUTER_API_KEY:
+    logging.error("❌ Не найден OPENROUTER_API_KEY")
+    exit(1)
 
 SYSTEM_PROMPT = load_prompt_rules()
 
 generation_config = {
     "temperature": 0.0,
     "top_p": 0.1,
+    "max_output_tokens": 1000,
 }
 
-model = genai.GenerativeModel(
-    model_name="gemini-3.1-flash-lite",
-    system_instruction=SYSTEM_PROMPT,
-    generation_config=generation_config
-)
+# ==========================================
+# ИНИЦИАЛИЗАЦИЯ МОДЕЛИ
+# ==========================================
+if USE_OPENROUTER:
+    model = None
+    logging.info(f"✅ Используется OpenRouter: {OPENROUTER_MODEL}")
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=SYSTEM_PROMPT,
+        generation_config=generation_config
+    )
+    logging.info("✅ Используется Google Gemini")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -153,6 +185,45 @@ user_requests = defaultdict(list)
 all_users = set()
 total_requests_count = 0
 user_ratings = defaultdict(list)
+
+# ==========================================
+# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ AI
+# ==========================================
+def get_ai_response(prompt: str, image_data: dict = None) -> str | None:
+    """Универсальный запрос к AI (OpenRouter или Gemini)"""
+    try:
+        if USE_OPENROUTER:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+            
+            if image_data:
+                import base64
+                b64_image = base64.b64encode(image_data["data"]).decode("utf-8")
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                    ]
+                })
+            
+            response = openrouter_client.chat.completions.create(
+                model=OPENROUTER_MODEL,
+                messages=messages,
+                temperature=generation_config.get("temperature", 0.0),
+                max_tokens=generation_config.get("max_output_tokens", 1000),
+            )
+            return response.choices[0].message.content
+        else:
+            if image_data:
+                response = model.generate_content([prompt, image_data])
+            else:
+                response = model.generate_content(prompt)
+            return response.text
+    except Exception as e:
+        logging.error(f"Ошибка AI: {e}")
+        return None
 
 # ==========================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -616,9 +687,9 @@ async def handle_callback(callback: types.CallbackQuery):
     await bot.send_chat_action(chat_id=callback.message.chat.id, action="typing")
     try:
         full_prompt = get_context(user_id, prompt_text)
-        response = await asyncio.to_thread(model.generate_content, full_prompt)
-        if response.text:
-            answer = response.text[:4096]
+        response_text = await asyncio.to_thread(get_ai_response, full_prompt)
+        if response_text:
+            answer = response_text[:4096]
             add_to_history(user_id, "user", prompt_text)
             add_to_history(user_id, "assistant", answer)
             
@@ -1512,9 +1583,9 @@ async def handle_photo(message: types.Message):
         image_data = {"mime_type": "image/jpeg", "data": downloaded_file.read()}
         prompt = message.caption or "Проанализируй этот скриншот по Roblox (Blox Fruits / ABA / AUT) и дай разбор."
         full_prompt = get_context(user_id, prompt)
-        response = await asyncio.to_thread(model.generate_content, [full_prompt, image_data])
-        if response.text:
-            answer = response.text[:4096]
+        response_text = await asyncio.to_thread(get_ai_response, full_prompt, image_data)
+        if response_text:
+            answer = response_text[:4096]
             add_to_history(user_id, "user", prompt)
             add_to_history(user_id, "assistant", answer)
             
@@ -1553,7 +1624,7 @@ async def handle_bonus(callback: types.CallbackQuery):
     await callback.message.answer(text, parse_mode="Markdown")
 
 # ==========================================
-# 🔥 ОСНОВНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР (ИСПРАВЛЕННЫЙ)
+# 🔥 ОСНОВНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР
 # ==========================================
 @dp.message(F.text)
 async def handle_user_message(message: types.Message):
@@ -1598,7 +1669,6 @@ async def handle_user_message(message: types.Message):
     if wiki_url:
         await message.answer(f"🔍 Проверяю данные в **{source_name}**...", parse_mode="Markdown")
         wiki_content = fetch_wiki_page_cached(wiki_url)
-        # ✅ БЕЗОПАСНАЯ ПРОВЕРКА
         if wiki_content and ("Ошибка" in wiki_content or "не удалось" in wiki_content):
             wiki_content = None
     
@@ -1610,9 +1680,9 @@ async def handle_user_message(message: types.Message):
             full_prompt = f"⚠️ Не удалось найти страницу в официальных источниках по этому запросу. Отвечай на основе своих знаний, но если не уверен — честно скажи.\n\n{full_prompt}"
 
     try:
-        response = await asyncio.to_thread(model.generate_content, full_prompt)
-        if response.text:
-            answer = response.text[:4096]
+        response_text = await asyncio.to_thread(get_ai_response, full_prompt)
+        if response_text:
+            answer = response_text[:4096]
             add_to_history(user_id, "assistant", answer)
             
             if len(user_text.split()) < 5:
@@ -1621,7 +1691,6 @@ async def handle_user_message(message: types.Message):
             if wiki_url and wiki_content and not ("Ошибка" in wiki_content or "не удалось" in wiki_content):
                 answer += f"\n\n📖 **Источник:** [{source_name}]({wiki_url})"
             
-            # ✅ ЗАЩИТА ОТ ОШИБОК MARKDOWN
             safe_answer = safe_markdown(answer[:3500])
             
             try:
@@ -1635,7 +1704,7 @@ async def handle_user_message(message: types.Message):
        
    
     except Exception as e:
-        logging.error(f"Ошибка Gemini API: {e}")
+        logging.error(f"Ошибка AI: {e}")
         await message.answer(
             f"⚠️ **Ошибка при обработке запроса**\n\n"
             f"📋 **Что случилось:** {str(e)[:100]}\n\n"
@@ -1646,6 +1715,7 @@ async def handle_user_message(message: types.Message):
             parse_mode="Markdown",
             reply_markup=get_quick_keyboard()
         )
+
 # ==========================================
 # ЗАПУСК
 # ==========================================
@@ -1659,3 +1729,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
