@@ -107,6 +107,78 @@ def get_user_chat(user_id: int):
         user_chats[user_id] = model.start_chat(history=[])
     return user_chats[user_id]
 # ==========================================
+# КРАСИВЫЕ КНОПКИ БЫСТРОГО КОНТЕКСТА
+# ==========================================
+def get_quick_keyboard():
+    builder = InlineKeyboardBuilder()
+    
+    # 1-й ряд: Комбо и Контра
+    builder.button(text="⚔️ Разбери комбо", callback_data="action_combo")
+    builder.button(text="🛡️ Как контрить?", callback_data="action_counter")
+    
+    # 2-й ряд: Трейды и Мета
+    builder.button(text="📊 Оценка W/L/F", callback_data="action_trade")
+    builder.button(text="🏆 Мета & Тир-лист", callback_data="action_meta")
+    
+    # 3-й ряд: Фишки и Очистка
+    builder.button(text="💡 Фишки & Советы", callback_data="action_tips")
+    builder.button(text="🧹 Очистить чат", callback_data="action_clear")
+    
+    # Сетка: по 2 кнопки в 3 ряда
+    builder.adjust(2, 2, 2)
+    return builder.as_markup()
+
+# ==========================================
+# ОБРАБОТКА НАЖАТИЙ НА ИНЛАЙН-КНОПКИ
+# ==========================================
+@dp.callback_query(F.data.startswith("action_"))
+async def handle_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    # Кнопка очистки контекста
+    if callback.data == "action_clear":
+        if user_id in user_chats:
+            del user_chats[user_id]
+        await callback.answer("Чат очищен!")
+        await callback.message.answer("🧹 **Контекст диалога очищен!** Задавай новый вопрос.")
+        return
+
+    # Карта быстрых промптов для кнопок
+    prompts = {
+        "action_combo": "Разбери подробное комбо и оптимальную ротацию скиллов для этого персонажа/фрукта.",
+        "action_counter": "Расскажи, как эффективно контрить этого персонажа/фрукт, какие у него уязвимости и слабости.",
+        "action_trade": "Оцени текущее велью и спрос на этот предмет/фрукт. Стоит ли делать с ним трейды?",
+        "action_meta": "Какое место этот персонаж/фрукт занимает в текущей мете (S/A/B тир) и актуален ли он сейчас?",
+        "action_tips": "Дай секретные фишки, байты эскейпов или тайминги для эффективной игры."
+    }
+    
+    prompt_text = prompts.get(callback.data)
+    if not prompt_text:
+        return
+
+    await callback.answer()
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="typing")
+    
+    try:
+        chat = get_user_chat(user_id)
+        response = await asyncio.to_thread(chat.send_message, prompt_text)
+        
+        if response.text:
+            try:
+                await callback.message.answer(
+                    response.text, 
+                    parse_mode="Markdown", 
+                    reply_markup=get_quick_keyboard()
+                )
+            except Exception:
+                await callback.message.answer(
+                    response.text, 
+                    reply_markup=get_quick_keyboard()
+                )
+    except Exception as e:
+        logging.error(f"Ошибка при обработке кнопки: {e}")
+        await callback.message.answer("Произошла ошибка при обработке запроса.")
+# ==========================================
 # КОМАНДЫ
 # ==========================================
 
@@ -155,11 +227,59 @@ async def cmd_clear(message: types.Message):
         "🧹 **Контекст диалога очищен!**\nМожешь задавать новый вопрос.",
         parse_mode="Markdown"
     )
+# ==========================================
+# ХРАНИЛИЩЕ ДАННЫХ, ЛИМИТЫ И ЗАЩИТА ОТ СПАМА
+# ==========================================
+user_chats = {}
+user_requests = defaultdict(list)  # Хранит таймстампы запросов
+all_users = set()                  # Список уникальных юзеров
+total_requests_count = 0           # Общий счетчик запросов
 
+def get_user_chat(user_id: int):
+    """Возвращает или создает сессию чата с памятью для юзера"""
+    if user_id not in user_chats:
+        user_chats[user_id] = model.start_chat(history=[])
+    return user_chats[user_id]
+
+def is_rate_limited(user_id: int) -> bool:
+    """
+    Защита от крашей и исчерпания API:
+    - Максимум 10 запросов в минуту от одного юзера.
+    - Автоматическая очистка старых таймстампов.
+    """
+    now = time.time()
+    user_timestamps = user_requests[user_id]
+    
+    # Очищаем запросы старше 60 секунд
+    user_requests[user_id] = [t for t in user_timestamps if now - t < 60]
+    
+    # Если за последнюю минуту сделано 10 или более запросов — блокируем
+    if len(user_requests[user_id]) >= 10:
+        return True
+    
+    # Фиксируем время нового запроса
+    user_requests[user_id].append(now)
+    return False
 # ==========================================
 # ХЕНДЛЕР ДЛЯ ФОТО
 # ==========================================
+@dp.message()
+async def handle_user_message(message: types.Message):
+    global total_requests_count
+    user_id = message.from_user.id
+    all_users.add(user_id)
 
+    # 🛡️ ПРОВЕРКА ЛИМИТА: если юзер спамит — останавливаем выполнение
+    if is_rate_limited(user_id):
+        await message.answer(
+            "⏳ **Слишком много запросов!**\n"
+            "Пожалуйста, подожди минуту перед следующей отправкой, чтобы не перегружать нейронку."
+        )
+        return
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    total_requests_count += 1
+    
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -190,7 +310,23 @@ async def handle_photo(message: types.Message):
 # ==========================================
 # ОБЩИЙ ТЕКСТОВЫЙ ХЕНДЛЕР (GEMINI)
 # ==========================================
+@dp.message()
+async def handle_user_message(message: types.Message):
+    global total_requests_count
+    user_id = message.from_user.id
+    all_users.add(user_id)
 
+    # 🛡️ ПРОВЕРКА ЛИМИТА: если юзер спамит — останавливаем выполнение
+    if is_rate_limited(user_id):
+        await message.answer(
+            "⏳ **Слишком много запросов!**\n"
+            "Пожалуйста, подожди минуту перед следующей отправкой, чтобы не перегружать нейронку."
+        )
+        return
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    total_requests_count += 1
+    
 @dp.message()
 async def handle_user_message(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
