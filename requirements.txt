@@ -2,3 +2,5 @@ aiogram>=3.0.0
 google-generativeai
 python-dotenv
 aiohttp
+beautifulSoup4
+requests
