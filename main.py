@@ -79,7 +79,17 @@ SYSTEM_PROMPT = """
 🥇 **S-Тир:** [Предметы/Персонажи] — [Коротко почему имба]
 🥈 **A-Тир:** [Предметы/Персонажи] — [Хорошие альтернативы]
 """
+# Настройки генерации для максимальной точности
+generation_config = {
+    "temperature": 0.2,  # Чем ниже (к 0), тем меньше галлюцинаций и выдумок
+    "top_p": 0.8,
+}
 
+model = genai.GenerativeModel(
+    model_name="gemini-3.1-flash-lite",
+    system_instruction=SYSTEM_PROMPT,
+    generation_config=generation_config
+)
 model = genai.GenerativeModel(
     model_name="gemini-3.1-flash-lite",
     system_instruction=SYSTEM_PROMPT
