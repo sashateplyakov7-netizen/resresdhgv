@@ -1636,9 +1636,6 @@ async def handle_user_message(message: types.Message):
                 await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
-   
-        )
-
 # ==========================================
 # ЗАПУСК
 # ==========================================
