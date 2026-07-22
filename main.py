@@ -30,13 +30,47 @@ CACHE_EXPIRE = 3600
 popular_answers_cache = {}
 POPULAR_CACHE_EXPIRE = 1800
 LEADERBOARD = defaultdict(int)
-COMMAND_ALIASES = {}
+COMMAND_ALIASES = {
+    "комбо": "/combo",
+    "трейд": "/trade",
+    "цена": "/price",
+    "фрукт": "/fruit",
+    "факт": "/fact",
+    "викторина": "/quiz",
+    "бросить": "/roll",
+    "удача": "/luck",
+    "мем": "/meme",
+    "подкол": "/roast",
+    "цитата": "/quote",
+    "вызов": "/challenge",
+}
 PRIORITY_USERS = []
 banned_users = set()
 muted_users = {}
 user_custom_limits = {}
 last_update_check = None
 update_cache = []
+user_warns = defaultdict(int)
+user_notes = defaultdict(str)
+
+# ==========================================
+# БЕЗОПАСНЫЙ MARKDOWN
+# ==========================================
+def safe_markdown(text: str) -> str:
+    """Очищает текст от незакрытых Markdown-тегов"""
+    if not text:
+        return text
+    text = text[:3500]
+    if text.count('**') % 2 != 0:
+        text += '**'
+    if text.count('__') % 2 != 0:
+        text += '__'
+    if text.count('[') != text.count(']'):
+        text += ']'
+    if text.count('`') % 2 != 0:
+        text += '`'
+    return text
+
 # ==========================================
 # ЗАГРУЗКА ПРАВИЛ ИЗ ФАЙЛА prompt_rules.md
 # ==========================================
@@ -46,16 +80,18 @@ def load_prompt_rules():
         with open("prompt_rules.md", "r", encoding="utf-8") as f:
             content = f.read().strip()
             if content:
+                logging.info("✅ Системный промпт загружен из prompt_rules.md")
                 return content
             else:
                 logging.warning("⚠️ Файл prompt_rules.md пуст! Использую стандартный промпт.")
-                return SYSTEM_PROMPT_DEFAULT
+                return "Ты — эксперт по Blox Fruits, ABA и AUT. Отвечай кратко и по делу."
     except FileNotFoundError:
         logging.warning("⚠️ Файл prompt_rules.md не найден! Использую стандартный промпт.")
-        return SYSTEM_PROMPT_DEFAULT
+        return "Ты — эксперт по Blox Fruits, ABA и AUT. Отвечай кратко и по делу."
     except Exception as e:
         logging.error(f"❌ Ошибка при чтении prompt_rules.md: {e}")
-        return SYSTEM_PROMPT_DEFAULT
+        return "Ты — эксперт по Blox Fruits, ABA и AUT. Отвечай кратко и по делу."
+
 # ==========================================
 # HTTP-ЗАГЛУШКА ДЛЯ RENDER
 # ==========================================
@@ -92,9 +128,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-SYSTEM_PROMPT = """
-[СМОТРИТЕ ТЕКСТОВЫЙ БЛОК НИЖЕ]
-"""
+SYSTEM_PROMPT = load_prompt_rules()
 
 generation_config = {
     "temperature": 0.0,
@@ -539,6 +573,9 @@ async def handle_rating(callback: types.CallbackQuery):
     }
     await callback.answer(messages.get(rating, "Спасибо за оценку!"), show_alert=True)
 
+# ==========================================
+# ОБРАБОТКА КНОПОК
+# ==========================================
 @dp.callback_query(F.data.startswith("action_"))
 async def handle_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -588,15 +625,17 @@ async def handle_callback(callback: types.CallbackQuery):
             answer = response.text[:4096]
             add_to_history(user_id, "user", prompt_text)
             add_to_history(user_id, "assistant", answer)
+            
+            safe_answer = safe_markdown(answer)
             try:
-                await callback.message.answer(answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+                await callback.message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
             except Exception:
-                await callback.message.answer(answer, reply_markup=get_quick_keyboard())
+                await callback.message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await callback.message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
     except Exception as e:
         logging.error(f"Ошибка кнопки: {e}")
-        await callback.message.answer("⚠️ Ошибка.", reply_markup=get_quick_keyboard())
+        await callback.message.answer(f"⚠️ Ошибка: {str(e)[:100]}", reply_markup=get_quick_keyboard())
 
 @dp.callback_query(F.data == "leaderboard")
 async def show_leaderboard(callback: types.CallbackQuery):
@@ -872,6 +911,9 @@ async def cmd_compliment(message: types.Message):
 async def cmd_build(message: types.Message):
     await message.answer(random.choice(BUILDS), parse_mode="Markdown")
 
+# ==========================================
+# 🔥 ВИКТОРИНА /guess (ИСПРАВЛЕНА)
+# ==========================================
 @dp.message(Command("guess"))
 async def cmd_guess(message: types.Message):
     categories = ["blox_fruits", "aba", "aut"]
@@ -904,6 +946,21 @@ async def cmd_guess(message: types.Message):
         logging.error(f"Ошибка создания опроса: {e}")
         await message.answer("❌ Не удалось создать викторину. Попробуй позже.", reply_markup=get_quick_keyboard())
 
+# ==========================================
+# ОБРАБОТЧИК ОТВЕТОВ НА ВИКТОРИНЫ (НАЧИСЛЕНИЕ ОЧКОВ)
+# ==========================================
+@dp.poll_answer()
+async def handle_poll_answer(poll_answer: types.PollAnswer):
+    """Начисление очков за правильные ответы в викторине"""
+    user_id = poll_answer.user.id
+    option_ids = poll_answer.option_ids
+    
+    if not option_ids:
+        return
+    
+    # Начисляем очко за участие (упрощённо)
+    LEADERBOARD[user_id] += 1
+
 @dp.message(Command("updates"))
 async def cmd_updates(message: types.Message):
     if not update_cache:
@@ -919,6 +976,233 @@ async def cmd_updates(message: types.Message):
     await message.answer(response, parse_mode="Markdown")
 
 # ==========================================
+# 🔥 НОВЫЕ ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
+# ==========================================
+@dp.message(Command("info"))
+async def cmd_info(message: types.Message):
+    """Информация о боте"""
+    await message.answer(
+        "🤖 **О боте:**\n\n"
+        "Я — эксперт по Blox Fruits, ABA и AUT!\n"
+        "Помогаю с трейдами, комбо и прокачкой.\n\n"
+        f"👥 Пользователей: {len(all_users)}\n"
+        f"📨 Запросов: {total_requests_count}\n\n"
+        "📌 /help — все команды",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("time"))
+async def cmd_time(message: types.Message):
+    """Текущее время"""
+    now = datetime.now()
+    await message.answer(
+        f"🕐 **Текущее время:**\n"
+        f"`{now.strftime('%d.%m.%Y %H:%M:%S')}`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("user"))
+async def cmd_user(message: types.Message):
+    """Информация о пользователе"""
+    user_id = message.from_user.id
+    name = message.from_user.first_name or "Unknown"
+    
+    history_len = len(user_chats.get(user_id, []))
+    requests = len(user_requests.get(user_id, []))
+    rating = user_ratings.get(user_id, [])
+    avg_rating = sum(rating) / len(rating) if rating else 0
+    
+    await message.answer(
+        f"👤 **Информация о вас:**\n\n"
+        f"• Имя: `{name}`\n"
+        f"• ID: `{user_id}`\n"
+        f"• Сообщений в истории: `{history_len}`\n"
+        f"• Всего запросов: `{requests}`\n"
+        f"• Средняя оценка: `{avg_rating:.1f}/5`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("stats_user"))
+async def cmd_stats_user(message: types.Message):
+    """Статистика пользователя"""
+    user_id = message.from_user.id
+    requests = len(user_requests.get(user_id, []))
+    
+    # Получаем позицию в лидерборде
+    sorted_users = sorted(user_requests.items(), key=lambda x: len(x[1]), reverse=True)
+    position = next((i+1 for i, (uid, _) in enumerate(sorted_users) if uid == user_id), None)
+    
+    await message.answer(
+        f"📊 **Ваша статистика:**\n\n"
+        f"• Запросов: `{requests}`\n"
+        f"• Место в топе: `{position or 'не в топе'}`\n"
+        f"• Активность: { '🔥 Высокая' if requests > 50 else '📈 Средняя' if requests > 10 else '📉 Низкая' }",
+        parse_mode="Markdown"
+    )
+
+# ==========================================
+# 🔥 НОВЫЕ АДМИН-КОМАНДЫ
+# ==========================================
+@dp.message(Command("admin_warn"))
+async def admin_warn(message: types.Message):
+    """Выдать предупреждение пользователю"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("❌ Используй: `/admin_warn ID Причина`", parse_mode="Markdown")
+        return
+    try:
+        user_id = int(parts[1])
+        reason = " ".join(parts[2:])
+        user_warns[user_id] += 1
+        warns = user_warns[user_id]
+        await bot.send_message(
+            user_id,
+            f"⚠️ **Вы получили предупреждение!**\n\n"
+            f"Причина: {reason}\n"
+            f"Всего предупреждений: {warns}/3\n\n"
+            f"💡 Если будет 3 предупреждения — вы будете забанены!"
+        )
+        await message.answer(f"✅ Пользователю `{user_id}` выдано предупреждение ({warns}/3)", parse_mode="Markdown")
+        
+        if warns >= 3:
+            banned_users.add(user_id)
+            await bot.send_message(user_id, "🚫 **Вы забанены!** Превышен лимит предупреждений.")
+            await message.answer(f"🚫 Пользователь `{user_id}` автоматически забанен!", parse_mode="Markdown")
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!", parse_mode="Markdown")
+
+@dp.message(Command("admin_unwarn"))
+async def admin_unwarn(message: types.Message):
+    """Снять предупреждение"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("❌ Используй: `/admin_unwarn ID`", parse_mode="Markdown")
+        return
+    try:
+        user_id = int(parts[1])
+        if user_id in user_warns and user_warns[user_id] > 0:
+            user_warns[user_id] -= 1
+            await message.answer(f"✅ Снято предупреждение у `{user_id}`. Осталось: {user_warns[user_id]}", parse_mode="Markdown")
+        else:
+            await message.answer(f"⚠️ У пользователя `{user_id}` нет предупреждений.", parse_mode="Markdown")
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!", parse_mode="Markdown")
+
+@dp.message(Command("admin_note"))
+async def admin_note(message: types.Message):
+    """Добавить заметку о пользователе"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("❌ Используй: `/admin_note ID Текст заметки`", parse_mode="Markdown")
+        return
+    try:
+        user_id = int(parts[1])
+        note = " ".join(parts[2:])
+        user_notes[user_id] = note
+        await message.answer(f"✅ Заметка для `{user_id}` сохранена: \"{note}\"", parse_mode="Markdown")
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!", parse_mode="Markdown")
+
+@dp.message(Command("admin_get_note"))
+async def admin_get_note(message: types.Message):
+    """Показать заметку о пользователе"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("❌ Используй: `/admin_get_note ID`", parse_mode="Markdown")
+        return
+    try:
+        user_id = int(parts[1])
+        note = user_notes.get(user_id, "Нет заметок")
+        await message.answer(f"📝 **Заметка о пользователе `{user_id}`:**\n\n{note}", parse_mode="Markdown")
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!", parse_mode="Markdown")
+
+@dp.message(Command("admin_all_users"))
+async def admin_all_users(message: types.Message):
+    """Показать всех пользователей (с пагинацией)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    users_list = list(all_users)
+    if not users_list:
+        await message.answer("📊 Нет пользователей.", parse_mode="Markdown")
+        return
+    
+    # Пагинация по 20 пользователей
+    page = 1
+    parts = message.text.split()
+    if len(parts) > 1:
+        try:
+            page = int(parts[1])
+        except:
+            pass
+    
+    total_pages = (len(users_list) + 19) // 20
+    start = (page - 1) * 20
+    end = start + 20
+    users_page = users_list[start:end]
+    
+    text = f"👥 **Пользователи (стр. {page}/{total_pages}):**\n\n"
+    for uid in users_page:
+        reqs = len(user_requests.get(uid, []))
+        text += f"• `{uid}` — {reqs} запросов\n"
+    
+    if total_pages > 1:
+        text += f"\n📌 Используй `/admin_all_users {page+1}` для след. страницы"
+    
+    await message.answer(text[:4000], parse_mode="Markdown")
+
+@dp.message(Command("admin_cleanup"))
+async def admin_cleanup(message: types.Message):
+    """Очистка неактивных пользователей (>30 дней)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    now = time.time()
+    inactive_limit = now - (30 * 24 * 60 * 60)  # 30 дней
+    
+    removed = 0
+    for user_id in list(user_chats.keys()):
+        if user_id not in user_requests:
+            del user_chats[user_id]
+            removed += 1
+    
+    await message.answer(f"🧹 **Очистка завершена!**\nУдалено неактивных чатов: {removed}", parse_mode="Markdown")
+
+@dp.message(Command("admin_export_users"))
+async def admin_export_users(message: types.Message):
+    """Экспорт списка пользователей"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    data = {
+        "users": list(all_users),
+        "total": len(all_users),
+        "active": len(user_requests),
+        "chats": len(user_chats),
+        "export_time": datetime.now().isoformat()
+    }
+    
+    filename = f"users_export_{int(time.time())}.json"
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    with open(filename, "rb") as f:
+        await message.answer_document(
+            types.BufferedInputFile(f.read(), filename=filename),
+            caption=f"📊 **Экспорт пользователей**\nВсего: {len(all_users)}"
+        )
+    os.remove(filename)
+
+# ==========================================
 # АДМИН-ПАНЕЛЬ
 # ==========================================
 @dp.message(Command("admin"))
@@ -928,20 +1212,30 @@ async def cmd_admin(message: types.Message):
         return
     await message.answer(
         "👑 **АДМИН-ПАНЕЛЬ**\n\n"
+        "📊 **Статистика:**\n"
         "• `/stats` — Просмотр статистики\n"
-        "• `/broadcast ТЕКСТ` — Рассылка всем пользователям\n"
-        "• `/restart` — Перезапуск бота\n"
+        "• `/admin_top_users` — Топ активных пользователей\n"
+        "• `/admin_all_users` — Список всех пользователей\n\n"
+        "🚫 **Управление:**\n"
         "• `/admin_ban ID` — Забанить пользователя\n"
         "• `/admin_unban ID` — Разбанить пользователя\n"
         "• `/admin_list_banned` — Список забаненных\n"
-        "• `/admin_clear_user ID` — Очистить историю пользователя\n"
-        "• `/admin_set_limit ID 5` — Установить лимит запросов (1-60)\n"
-        "• `/admin_get_user ID` — Информация о пользователе\n"
+        "• `/admin_mute ID 10` — Замутить на N минут\n"
+        "• `/admin_warn ID Причина` — Выдать предупреждение\n"
+        "• `/admin_unwarn ID` — Снять предупреждение\n\n"
+        "📝 **Заметки:**\n"
+        "• `/admin_note ID Текст` — Добавить заметку\n"
+        "• `/admin_get_note ID` — Показать заметку\n\n"
+        "⚙️ **Системные:**\n"
+        "• `/admin_clear_user ID` — Очистить историю\n"
+        "• `/admin_set_limit ID 5` — Установить лимит запросов\n"
         "• `/admin_logs` — Последние логи\n"
-        "• `/admin_top_users` — Топ активных пользователей\n"
-        "• `/admin_mute ID 10` — Замутить пользователя на N минут\n"
-        "• `/admin_export` — Экспорт статистики в файл\n"
-        "• `/admin_check_updates` — Принудительная проверка обновлений",
+        "• `/admin_export` — Экспорт статистики\n"
+        "• `/admin_export_users` — Экспорт пользователей\n"
+        "• `/admin_cleanup` — Очистить неактивных\n"
+        "• `/admin_check_updates` — Проверить обновления\n"
+        "• `/broadcast ТЕКСТ` — Рассылка\n"
+        "• `/restart` — Перезапуск бота",
         parse_mode="Markdown"
     )
 
@@ -1107,13 +1401,17 @@ async def admin_get_user(message: types.Message):
         now = time.time()
         user_timestamps = user_requests.get(user_id, [])
         recent_requests = len([t for t in user_timestamps if now - t < 60])
+        warns = user_warns.get(user_id, 0)
+        note = user_notes.get(user_id, "Нет заметок")
         await message.answer(
             f"👤 **ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ**\n\n"
             f"• ID: `{user_id}`\n"
             f"• В истории: `{history_len}` сообщений\n"
             f"• Запросов за минуту: `{recent_requests}`\n"
             f"• Лимит: `{custom_limit}` запросов/мин\n"
-            f"• Статус: {'🚫 Забанен' if is_banned else '🔇 Замучен' if is_muted_flag else '✅ Активен'}",
+            f"• Предупреждений: `{warns}/3`\n"
+            f"• Статус: {'🚫 Забанен' if is_banned else '🔇 Замучен' if is_muted_flag else '✅ Активен'}\n"
+            f"• Заметка: `{note[:100]}`",
             parse_mode="Markdown"
         )
     except ValueError:
@@ -1223,15 +1521,17 @@ async def handle_photo(message: types.Message):
             answer = response.text[:4096]
             add_to_history(user_id, "user", prompt)
             add_to_history(user_id, "assistant", answer)
+            
+            safe_answer = safe_markdown(answer)
             try:
-                await message.answer(answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+                await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
             except Exception:
-                await message.answer(answer, reply_markup=get_quick_keyboard())
+                await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await message.answer("❌ Не удалось распознать изображение.", reply_markup=get_quick_keyboard())
     except Exception as e:
         logging.error(f"Ошибка фото: {e}")
-        await message.answer("⚠️ Не удалось прочитать картинку.", reply_markup=get_quick_keyboard())
+        await message.answer(f"⚠️ Не удалось прочитать картинку: {str(e)[:100]}", reply_markup=get_quick_keyboard())
 
 # ==========================================
 # ОБРАБОТКА БОНУС-КНОПКИ
@@ -1255,6 +1555,7 @@ async def handle_bonus(callback: types.CallbackQuery):
     else:
         text = f"💬 **Бонусная цитата:**\n{random.choice(QUOTES)}"
     await callback.message.answer(text, parse_mode="Markdown")
+
 # ==========================================
 # 🔥 ОСНОВНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР (ИСПРАВЛЕННЫЙ)
 # ==========================================
@@ -1281,8 +1582,7 @@ async def handle_user_message(message: types.Message):
     # Проверяем кэш популярных вопросов
     cached_answer = get_cached_answer(user_text)
     if cached_answer:
-        # ✅ ОБРЕЗАЕМ ДО БЕЗОПАСНОЙ ДЛИНЫ
-        safe_answer = cached_answer[:4000]
+        safe_answer = safe_markdown(cached_answer[:3500])
         try:
             await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
         except Exception:
@@ -1302,7 +1602,8 @@ async def handle_user_message(message: types.Message):
     if wiki_url:
         await message.answer(f"🔍 Проверяю данные в **{source_name}**...", parse_mode="Markdown")
         wiki_content = fetch_wiki_page_cached(wiki_url)
-        if "Ошибка" in wiki_content or "не удалось" in wiki_content:
+        # ✅ БЕЗОПАСНАЯ ПРОВЕРКА
+        if wiki_content and ("Ошибка" in wiki_content or "не удалось" in wiki_content):
             wiki_content = None
     
     if wiki_content:
@@ -1315,41 +1616,39 @@ async def handle_user_message(message: types.Message):
     try:
         response = await asyncio.to_thread(model.generate_content, full_prompt)
         if response.text:
-            # ✅ ОБРЕЗАЕМ ОТВЕТ ДО БЕЗОПАСНОЙ ДЛИНЫ
             answer = response.text[:4096]
             add_to_history(user_id, "assistant", answer)
             
             if len(user_text.split()) < 5:
                 cache_answer(user_text, answer)
             
-            if wiki_url and not ("Ошибка" in wiki_content or "не удалось" in wiki_content):
+            if wiki_url and wiki_content and not ("Ошибка" in wiki_content or "не удалось" in wiki_content):
                 answer += f"\n\n📖 **Источник:** [{source_name}]({wiki_url})"
             
             # ✅ ЗАЩИТА ОТ ОШИБОК MARKDOWN
-            safe_answer = answer[:4000]  # Оставляем запас под ссылки
+            safe_answer = safe_markdown(answer[:3500])
             
             try:
                 await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
                 await message.answer("⭐ Оцени ответ:", reply_markup=get_rating_keyboard())
             except Exception as e:
-                # Если Markdown не работает — отправляем без форматирования
                 logging.warning(f"Markdown error: {e}")
                 await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
-        await message.answer("⚠️ Упсс, траблы с нейронкой. Попробуй позже.", reply_markup=get_quick_keyboard())
-        # ✅ ОБРЕЗАЕМ ДО БЕЗОПАСНОЙ ДЛИНЫ
-safe_answer = answer[:4000]
+        await message.answer(
+            f"⚠️ **Ошибка при обработке запроса**\n\n"
+            f"📋 **Что случилось:** {str(e)[:100]}\n\n"
+            f"💡 **Попробуй:**\n"
+            f"• Переформулировать вопрос\n"
+            f"• Использовать кнопки\n"
+            f"• Написать позже",
+            parse_mode="Markdown",
+            reply_markup=get_quick_keyboard()
+        )
 
-try:
-    await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
-    await message.answer("⭐ Оцени ответ:", reply_markup=get_rating_keyboard())
-except Exception as e:
-    # Если Markdown не работает — отправляем без форматирования
-    logging.warning(f"Markdown error: {e}")
-    await message.answer(safe_answer, reply_markup=get_quick_keyboard())
 # ==========================================
 # ЗАПУСК
 # ==========================================
