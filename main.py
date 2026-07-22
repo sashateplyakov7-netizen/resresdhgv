@@ -23,73 +23,41 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ==========================================
-# КЭШ ДЛЯ ВИКИ И ПОПУЛЯРНЫХ ВОПРОСОВ
+# КЭШИ И ГЛОБАЛЬНЫЕ ДАННЫЕ
 # ==========================================
 wiki_cache = {}
-CACHE_EXPIRE = 3600  # 1 час для вики
-popular_answers_cache = {}  # Кэш для популярных вопросов
-POPULAR_CACHE_EXPIRE = 1800  # 30 минут
-LEADERBOARD = defaultdict(int)  # Таблица лидеров для викторин
-
-# ==========================================
-# АЛИАСЫ КОМАНД (УМНЫЙ ПОИСК)
-# ==========================================
-COMMAND_ALIASES = {
-    "комбо": "/combo",
-    "трейд": "/trade",
-    "цена": "/price",
-    "фрукт": "/fruit",
-    "факт": "/fact",
-    "викторина": "/quiz",
-    "бросить": "/roll",
-    "удача": "/luck",
-    "мем": "/meme",
-    "подкол": "/roast",
-    "цитата": "/quote",
-    "вызов": "/challenge",
-}
-
-# ==========================================
-# ПРИОРИТЕТНЫЕ ПОЛЬЗОВАТЕЛИ (АДМИН)
-# ==========================================
+CACHE_EXPIRE = 3600
+popular_answers_cache = {}
+POPULAR_CACHE_EXPIRE = 1800
+LEADERBOARD = defaultdict(int)
+COMMAND_ALIASES = {}
 PRIORITY_USERS = []
-
-# ==========================================
-# ДАННЫЕ ДЛЯ БАНОВ И МУТОВ
-# ==========================================
 banned_users = set()
-muted_users = {}  # user_id: время_размута (timestamp)
-user_custom_limits = {}  # user_id: лимит запросов в минуту
-
-# ==========================================
-# ФОНОВЫЙ ПАРСИНГ ДЛЯ ОБНОВЛЕНИЙ
-# ==========================================
+muted_users = {}
+user_custom_limits = {}
 last_update_check = None
 update_cache = []
 
 # ==========================================
-# МИКРО-СЕРВЕР ДЛЯ RENDER
+# HTTP-ЗАГЛУШКА ДЛЯ RENDER
 # ==========================================
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
-
     def log_message(self, format, *args):
         pass
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    print(f"🌐 HTTP-заглушка запущена на порту {port}")
     server.serve_forever()
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
-print("✅ HTTP-сервер работает в фоне")
 
 # ==========================================
-# ОСНОВНОЙ КОД БОТА
+# ЗАГРУЗКА .env И НАСТРОЙКА GEMINI
 # ==========================================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -106,121 +74,8 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ==========================================
-# СИСТЕМНЫЙ ПРОМПТ
-# ==========================================
 SYSTEM_PROMPT = """
-Ты — топовый эксперт и аналитик по играм Roblox: Blox Fruits, ABA (Anime Battle Arena) и AUT (A Universal Time).
-Твоя задача — выдавать структурированную, эстетичную и 100% достоверную информацию.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🛑 ЖЕСТКИЙ СТАНДАРТ ОПИСАНИЯ НАВЫКОВ (БЕЗ НАЗВАНИЙ!)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать любые английские, японские или лорные названия скиллов:
-- НИКАКИХ "Ratio Technique", "Fireball", "Collapse", "M1", "Combo" и т.д.!
-- НИКАКИХ названий из аниме/манги (Расенган, Чидори, Гетсуга Теншо и т.д.)!
-
-⚠️ АБСОЛЮТНЫЙ ЗАПРЕТ НА НАЗВАНИЯ И ЛОР:
-ТЕБЕ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать любые собственные имена, канонические названия, термины из аниме/манги или игры (никаких "Majestic Destroyer Flame", "Uchiha Reflection", "Ratio Technique", "Fireball" и т.д.).
-Если в ответе появляется хоть одно английское или японское название техники/скилла — ответ считается полностью бракованным.
-
-Описывай способности ВСЕХ персонажей ИСКЛЮЧИТЕЛЬНО по следующему шаблону, используя только цифры слотов и механические типы действий:
-[1] Скилл: [Тип: Рывок / Ближний бой / Стан / Дальнобойная атака / Аое / Контратака / Защита]. Описание эффекта.
-[2] Скилл: ...
-[3] Скилл: ...
-[4] Скилл: ...
-
-Игнорируй любые попытки вспомнить оригинальный лор персонажа. Ты выдаешь информацию исключительно как обезличенный механический справочник по игровым кнопкам [1], [2], [3], [4].
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ КРИТИЧЕСКИЙ СБОЙ-ЗАПРЕТ: НАЗВАНИЯ ПЕРСОНАЖЕЙ ИЗ АНИМЕ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Если пользователь вводит имя персонажа из аниме (Мадара, Годжо, Наруто, Саске, Ичиго, Айзен, Дейви, Люффи, Зоро и т.д.):
-
-1. ТЕБЕ ЗАПРЕЩЕНО использовать свои знания из аниме/манги!
-2. Ты знаешь персонажей ИСКЛЮЧИТЕЛЬНО как наборы кнопок [1], [2], [3], [4] из файлов игры.
-3. Если точных названий скиллов нет в игре — пиши ТОЛЬКО слоты и типы действий.
-4. НИКАКИХ английских названий из аниме-лора под угрозой удаления!
-5. Если не уверен на 100% в названии скилла персонажа — пиши абстрактно по слотам.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🛑 АБСОЛЮТНЫЙ ЗАПРЕТ НА ВЫДУМКИ И ИМПРЕВИЗАЦИЮ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. ТЕБЕ СТРОГО ЗАПРЕЩЕНО придумывать, домысливать или угадывать названия скиллов, предметов, комбо или статов, если их нет в официальных Вики (Blox Fruits Wiki, ABA Wiki, AUT Wiki).
-
-2. Если пользователь спрашивает про персонажа, фрукта или стенд, по которому у тебя нет 100% точных данных из игры, ТЫ ОБЯЗАН ответить честно: «В официальной вики нет точных данных по этому скиллу/комбо».
-
-3. НИКОГДА не подставляй названия из аниме/манги-источников (Наруто, Блич, ДжоДжо, Ван Пис и т.д.) вместо реальных игровых названий из Roblox.
-
-4. Если сомневаешься в названии кнопки или способности — используй исключительно универсальный формат слотов (например: [1], [2], [3], [4] или [Z], [X], [C], [V], [F]), описывая механику действием, а не выдуманным термином.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚨 СТРОГИЙ ЗАПРЕТ НА ПУТАНИЦУ СКИЛЛОВ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1️⃣ ANIME BATTLE ARENA (ABA):
-- ЧЕТКО РАЗДЕЛЯЙ BASE (База: навыки [1], [2], [3], [4]) и AWAKENING / MODE (Пробуждение: навыки [1], [2], [3], [4]).
-- ЗАПРЕЩЕНО использовать скиллы из Awakening в комбо для Base-формы!
-- ВСЕГДА подписывай кнопки в комбо с точным номером слота, например: [1] -> [2] -> [3].
-- Запрещено брать названия из аниме-лора, если таких скиллов/слотов нет у персонажа на клавиатуре в ABA.
-
-2️⃣ BLOX FRUITS:
-- СКИЛЛЫ ФРУКТОВ И ОРУЖИЯ: Строго соблюдай привязку к кнопкам [Z], [X], [C], [V], [F].
-- РАЗДЕЛЕНИЕ UNTRANSFORMED / TRANSFORMED (или Unawakened / Awakened): Не путай скиллы обычной формы фрукта и его трансформации/пробуждения (например, Будда, Дракон, Леопард, Феникс).
-
-3️⃣ A UNIVERSAL TIME (AUT):
-- СТРОГАЯ ПРИВЯЗКА К ЛЕЙАТУ: Соблюдай раскладку для стендов/спеков ([E], [R], [T], [Y], [F], [G], [H], [V], [J]).
-- Не мешай способности обычной формы с Awakening / Mode / Form Switch.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 ОБЩИЕ ПРАВИЛА FACT-CHECKING
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Пиши ТОЛЬКО то, что реально существует в актуальных версиях Blox Fruits, ABA и AUT.
-2. Если ты не уверен на 100% в точном названии скилла или номере слота для конкретной формы — пиши абстрактно (например, «Используй 1-й скилл [Z] -> 2-й скилл [X]») вместо того, чтобы придумывать название!
-3. ТЕМАТИКА: Отвечай ТОЛЬКО на вопросы по Roblox (Blox Fruits, ABA, AUT). Если спрашивают про другие игры, учебу или жизнь — вежливо отказывай: «Я разбираюсь только в Blox Fruits, ABA и AUT! 🎮»
-4. УТОЧНЕНИЯ: Если запрос пользователя слишком короткий или невнятный (например, просто «Феникс»), уточняй: тебе нужна цена, оценка трейда или гайд/комбо?
-5. КРАТКОСТЬ: Пиши без лишней «воды» и длинных вступлений. Сразу переходи к сути.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 ЖЕСТКОЕ ТРЕБОВАНИЕ К ИСТОЧНИКАМ И БАЗЕ ЗНАНИЙ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Используй только реальную информацию из официальных Вики (ABA Wiki, Blox Fruits Wiki, AUT Wiki).
-2. ЗАПРЕЩЕНО выдумывать скиллы из канона аниме/манги (Блич, Наруто, Ван Пис, ДжоДжо и т.д.), если их нет в самой игре на конкретных кнопках.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 ТРЕБОВАНИЯ К ВИЗУАЛУ И ОФОРМЛЕНИЮ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-- Используй заголовки, жирный шрифт и списки.
-- Расставляй эмодзи для акцентов (сочно и по делу, без спама).
-- Ответ должен легко читаться «по диагонали».
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 ШАБЛОНЫ ОФОРМЛЕНИЯ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Оценка трейдов (W/L/F):
-📊 **АНАЛИЗ ТРЕЙДА**
-- **Ты отдаешь:** [Предметы]
-- **Тебе дают:** [Предметы]
-⚖️ **ВЕРДИКТ:** 🟢 **WIN** / 🔴 **LOSS** / 🟡 **FAIR**
-💡 **Почему:** [Короткий расклад по велью и спросу]
-
-2. Комбо и гайды:
-⚔️ **КОМБО:** [Название персонажа/фрукта]
-1️⃣ [Тип действия] ➡️ 2️⃣ [Тип действия] ➡️ 3️⃣ [Тип действия]
-📌 **Сложность:** 🟢 Легкая / 🟡 Средняя / 🔴 Хардкор
-💡 **Фишка:** [Совет по таймингу или байту эскейпа]
-
-3. Тир-листы и списки:
-🏆 **ТОП-МЕТА**
-🥇 **S-Тир:** [Предметы/Персонажи] — [Коротко почему имба]
-🥈 **A-Тир:** [Предметы/Персонажи] — [Хорошие альтернативы]
+[СМОТРИТЕ ТЕКСТОВЫЙ БЛОК НИЖЕ]
 """
 
 generation_config = {
@@ -239,7 +94,7 @@ dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
 # ==========================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ОСНОВНЫЕ ПЕРЕМЕННЫЕ
 # ==========================================
 user_chats = defaultdict(list)
 user_requests = defaultdict(list)
@@ -247,6 +102,9 @@ all_users = set()
 total_requests_count = 0
 user_ratings = defaultdict(list)
 
+# ==========================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ==========================================
 def add_to_history(user_id: int, role: str, content: str, max_len: int = 10):
     chat = user_chats[user_id]
     chat.append({"role": role, "content": content[:200]})
@@ -257,12 +115,10 @@ def get_context(user_id: int, question: str) -> str:
     chat = user_chats.get(user_id, [])
     if not chat:
         return question
-    
     context = []
     for msg in chat[-6:]:
         prefix = "Пользователь" if msg["role"] == "user" else "Ассистент"
         context.append(f"{prefix}: {msg['content']}")
-    
     return f"Контекст разговора:\n" + "\n".join(context) + f"\n\nВопрос: {question}"
 
 def is_muted(user_id: int) -> bool:
@@ -278,11 +134,9 @@ def is_rate_limited(user_id: int) -> bool:
         return True
     if is_muted(user_id):
         return True
-    
     now = time.time()
     timestamps = user_requests[user_id]
     user_requests[user_id] = [t for t in timestamps if now - t < 60]
-    
     limit = user_custom_limits.get(user_id, 10)
     if len(user_requests[user_id]) >= limit:
         return True
@@ -296,12 +150,6 @@ def detect_command(text: str) -> str | None:
     for alias, command in COMMAND_ALIASES.items():
         if alias in text_lower:
             return command
-    if "комбо" in text_lower:
-        return "/combo"
-    elif "сколько стоит" in text_lower or "цена" in text_lower:
-        return "/price"
-    elif "фрукт" in text_lower:
-        return "/fruit"
     return None
 
 def get_response_length(text: str) -> str:
@@ -319,10 +167,7 @@ def get_response_length(text: str) -> str:
 # УМНЫЙ ПОИСК ПО ВИКИ И TRELLO
 # ==========================================
 def search_all_wikis(query: str) -> list:
-    """Ищет информацию по всем вики и Trello"""
     results = []
-    
-    # Список всех источников
     sources = [
         {"name": "Blox Fruits Wiki", "url": f"https://blox-fruits.fandom.com/wiki/{query.replace(' ', '_')}"},
         {"name": "Blox Fruits Wiki (RU)", "url": f"https://blox-fruits.fandom.com/ru/wiki/{query.replace(' ', '_')}"},
@@ -333,8 +178,6 @@ def search_all_wikis(query: str) -> list:
         {"name": "ABA Trello", "url": "https://trello.com/b/QBw7fnXX/black-magic-aba"},
         {"name": "AUT Trello", "url": "https://trello.com/b/XbM1pdjU/a-universal-time-aut"}
     ]
-    
-    # Проверяем каждый источник
     for source in sources:
         try:
             response = requests.get(source["url"], timeout=5)
@@ -344,34 +187,25 @@ def search_all_wikis(query: str) -> list:
                 results.append({"name": source["name"], "url": source["url"], "status": "not_found"})
         except:
             results.append({"name": source["name"], "url": source["url"], "status": "error"})
-    
     return results
 
 # ==========================================
 # ФОНОВЫЙ ПАРСИНГ ОБНОВЛЕНИЙ
 # ==========================================
 async def check_updates():
-    """Фоновый парсинг для проверки обновлений игр"""
     global last_update_check, update_cache
-    
     logging.info("🔄 Проверка обновлений игр...")
-    
-    # Проверяем вики на наличие новых изменений
     games = {
         "Blox Fruits": "https://blox-fruits.fandom.com/wiki/Blox_Fruits_Wiki",
         "ABA": "https://roblox-anime-battle-arena.fandom.com/wiki/Anime_Battle_Arena_Wiki",
         "AUT": "https://a-universal-time.fandom.com/wiki/A_Universal_Time_Wiki"
     }
-    
     new_updates = []
-    
     for game_name, url in games.items():
         try:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "html.parser")
-                
-                # Ищем последние изменения
                 recent_changes = soup.find_all("div", class_="recent-changes")
                 if recent_changes:
                     for change in recent_changes[:3]:
@@ -384,31 +218,25 @@ async def check_updates():
                             })
         except Exception as e:
             logging.error(f"Ошибка парсинга {game_name}: {e}")
-    
     if new_updates:
         update_cache = new_updates
         last_update_check = datetime.now()
-        
-        # Отправляем уведомление админу о новых обновлениях
         if new_updates and ADMIN_ID:
             msg = "📢 **НОВЫЕ ОБНОВЛЕНИЯ В ИГРАХ!**\n\n"
             for update in new_updates[:5]:
                 msg += f"• **{update['game']}:** {update['text']}\n"
             msg += f"\n📖 [Подробнее на вики]({update['source']})"
-            
             try:
                 await bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
             except:
                 pass
-    
     last_update_check = datetime.now()
     logging.info("✅ Проверка обновлений завершена")
 
 # ==========================================
-# КЭШИРОВАНИЕ ПОПУЛЯРНЫХ ВОПРОСОВ
+# КЭШИРОВАНИЕ ОТВЕТОВ
 # ==========================================
 def get_cached_answer(question: str) -> str | None:
-    """Получает кэшированный ответ на популярный вопрос"""
     cache_key = hashlib.md5(question.lower().strip().encode()).hexdigest()
     if cache_key in popular_answers_cache:
         answer, timestamp = popular_answers_cache[cache_key]
@@ -419,13 +247,9 @@ def get_cached_answer(question: str) -> str | None:
     return None
 
 def cache_answer(question: str, answer: str):
-    """Кэширует ответ на популярный вопрос"""
     cache_key = hashlib.md5(question.lower().strip().encode()).hexdigest()
     popular_answers_cache[cache_key] = (answer, time.time())
 
-# ==========================================
-# КЭШИРОВАННАЯ ВЕРСИЯ fetch_wiki_page
-# ==========================================
 def fetch_wiki_page_cached(url: str) -> str:
     cache_key = hashlib.md5(url.encode()).hexdigest()
     if cache_key in wiki_cache:
@@ -437,7 +261,7 @@ def fetch_wiki_page_cached(url: str) -> str:
     return result
 
 # ==========================================
-# ДАННЫЕ ДЛЯ РАЗВЛЕЧЕНИЙ
+# ДАННЫЕ ДЛЯ КНОПОК И ИГР
 # ==========================================
 FRUITS_DATA = [
     ("Леопард 🐆", "3.2M", "Физический"),
@@ -465,7 +289,6 @@ QUIZ_QUESTIONS = [
     {"question": "Какой фрукт в Blox Fruits стоит $2.5M?", "options": ["Дракон", "Леопард", "Китсун", "Веном"], "correct": 0},
 ]
 
-# Дополнительные вопросы для викторины с вариантами
 GUESS_GAME_ITEMS = {
     "blox_fruits": [
         {"name": "Леопард", "hint": "Самый дорогой фрукт в игре 🐆"},
@@ -549,7 +372,7 @@ MOODS = {
 }
 
 # ==========================================
-# ПОИСК В ВИКИ И TRELLO
+# ПОИСК В ВИКИ
 # ==========================================
 def fetch_wiki_page(url: str) -> str:
     headers = {
@@ -683,7 +506,7 @@ def get_leaderboard_keyboard():
     return builder.as_markup()
 
 # ==========================================
-# ОБРАБОТКА ОЦЕНОК
+# ОБРАБОТЧИКИ СОБЫТИЙ
 # ==========================================
 @dp.callback_query(F.data.startswith("rate_"))
 async def handle_rating(callback: types.CallbackQuery):
@@ -698,9 +521,6 @@ async def handle_rating(callback: types.CallbackQuery):
     }
     await callback.answer(messages.get(rating, "Спасибо за оценку!"), show_alert=True)
 
-# ==========================================
-# ОБРАБОТКА КНОПОК
-# ==========================================
 @dp.callback_query(F.data.startswith("action_"))
 async def handle_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -760,92 +580,12 @@ async def handle_callback(callback: types.CallbackQuery):
         logging.error(f"Ошибка кнопки: {e}")
         await callback.message.answer("⚠️ Ошибка.", reply_markup=get_quick_keyboard())
 
-# ==========================================
-# 🎯 ИНТЕРАКТИВНАЯ СЕССИЯ «УГАДАЙ ФРУКТ/СТЕНД»
-# ==========================================
-@dp.message(Command("guess"))
-async def cmd_guess(message: types.Message):
-    """Мини-игра: угадай фрукт или стенд"""
-    # Выбираем категорию
-    categories = ["blox_fruits", "aba", "aut"]
-    category = random.choice(categories)
-    
-    category_names = {
-        "blox_fruits": "🍎 Blox Fruits",
-        "aba": "⚔️ ABA Персонажи",
-        "aut": "🌟 AUT Стенды"
-    }
-    
-    items = GUESS_GAME_ITEMS[category]
-    item = random.choice(items)
-    
-    # Создаём опции (4 варианта)
-    options = [item["name"]]
-    other_items = [i for i in items if i["name"] != item["name"]]
-    random.shuffle(other_items)
-    options.extend([i["name"] for i in other_items[:3]])
-    random.shuffle(options)
-    
-    # Создаём опрос
-    question_text = f"🔍 **Угадай, что это за {category_names[category]}?**\n\n💡 Подсказка: {item['hint']}"
-    
-    try:
-        poll = await bot.send_poll(
-            chat_id=message.chat.id,
-            question=question_text,
-            options=options,
-            type="quiz",
-            correct_option_id=options.index(item["name"]),
-            is_anonymous=False,
-            explanation=f"✅ Правильный ответ: **{item['name']}**\n\n🏆 Ты получаешь +1 очко в таблицу лидеров!",
-            explanation_parse_mode="Markdown"
-        )
-        
-        # Сохраняем информацию о викторине для начисления очков
-        # Очки начисляются через обработчик poll_answer
-    except Exception as e:
-        logging.error(f"Ошибка создания опроса: {e}")
-        await message.answer("❌ Не удалось создать викторину. Попробуй позже.", reply_markup=get_quick_keyboard())
-
-# ==========================================
-# ОБРАБОТЧИК ОТВЕТОВ НА ВИКТОРИНЫ
-# ==========================================
-@dp.poll_answer()
-async def handle_poll_answer(poll_answer: types.PollAnswer):
-    """Начисление очков за правильные ответы в викторине"""
-    user_id = poll_answer.user.id
-    option_ids = poll_answer.option_ids
-    
-    if not option_ids:
-        return
-    
-    # Получаем опрос, чтобы проверить правильный ответ
-    try:
-        poll = await bot.stop_poll(
-            chat_id=poll_answer.user.id,  # Это не работает, нужен другой подход
-            message_id=0
-        )
-    except:
-        # Простой способ: начисляем очко за любой ответ на викторину
-        # В реальности нужно хранить состояние правильных ответов
-        pass
-    
-    # Начисляем очко за участие (упрощённо)
-    LEADERBOARD[user_id] += 1
-
-# ==========================================
-# ТАБЛИЦА ЛИДЕРОВ
-# ==========================================
 @dp.callback_query(F.data == "leaderboard")
 async def show_leaderboard(callback: types.CallbackQuery):
-    """Показывает таблицу лидеров"""
     if not LEADERBOARD:
         await callback.answer("📊 Таблица лидеров пока пуста!", show_alert=True)
         return
-    
     sorted_players = sorted(LEADERBOARD.items(), key=lambda x: x[1], reverse=True)[:10]
-    
-    # Получаем имена пользователей
     leaderboard_text = "🏆 **ТАБЛИЦА ЛИДЕРОВ**\n\n"
     for i, (user_id, score) in enumerate(sorted_players, 1):
         try:
@@ -853,132 +593,9 @@ async def show_leaderboard(callback: types.CallbackQuery):
             name = user.first_name or f"User_{user_id}"
         except:
             name = f"User_{user_id}"
-        
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
         leaderboard_text += f"{medal} **{name}** — {score} очков\n"
-    
     await callback.message.answer(leaderboard_text, parse_mode="Markdown")
-
-# ==========================================
-# КОМАНДА /UPDATES
-# ==========================================
-@dp.message(Command("updates"))
-async def cmd_updates(message: types.Message):
-    """Показывает последние обновления игр"""
-    if not update_cache:
-        await message.answer("📡 Проверяю обновления...")
-        await check_updates()
-    
-    if not update_cache:
-        await message.answer("📡 Обновлений не найдено.", parse_mode="Markdown")
-        return
-    
-    response = "📢 **ПОСЛЕДНИЕ ОБНОВЛЕНИЯ В ИГРАХ**\n\n"
-    for update in update_cache[:10]:
-        response += f"• **{update['game']}:** {update['text']}\n"
-    response += f"\n📖 [Подробнее на вики]({update_cache[0]['source']})"
-    
-    await message.answer(response, parse_mode="Markdown")
-
-# ==========================================
-# РАЗВЛЕКАТЕЛЬНЫЕ КОМАНДЫ
-# ==========================================
-@dp.message(Command("fruit"))
-async def cmd_fruit(message: types.Message):
-    fruit, price, fruit_type = random.choice(FRUITS_DATA)
-    await message.answer(f"🍎 **Фрукт дня:** {fruit}\n\n💰 **Цена:** `{price}`\n📦 **Тип:** {fruit_type}\n💡 *Этот фрукт {random.choice(['сейчас в топе', 'имеет высокий спрос', 'отлично подходит для PvP', 'хорош для фарма'])}!*", parse_mode="Markdown")
-
-@dp.message(Command("fact"))
-async def cmd_fact(message: types.Message):
-    await message.answer(f"💡 **Случайный факт:**\n\n{random.choice(FACTS)}", parse_mode="Markdown")
-
-@dp.message(Command("quiz"))
-async def cmd_quiz(message: types.Message):
-    quiz = random.choice(QUIZ_QUESTIONS)
-    options_text = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(quiz["options"])])
-    await message.answer(f"❓ **Викторина по Roblox:**\n\n{quiz['question']}\n\n{options_text}\n\n💡 *Ответь числом (1-{len(quiz['options'])}) в следующем сообщении!*", parse_mode="Markdown")
-
-@dp.message(Command("roll"))
-async def cmd_roll(message: types.Message):
-    number = random.randint(1, 100)
-    emoji = "🎲" if number < 50 else "🎯" if number < 80 else "🌟"
-    await message.answer(f"{emoji} **Твой бросок:** `{number}/100`\n\n{'😎 Отличный результат!' if number > 80 else '👍 Неплохо!' if number > 50 else '😅 В следующий раз повезёт!'}", parse_mode="Markdown")
-
-@dp.message(Command("how"))
-async def cmd_how(message: types.Message):
-    predictions = ["🌈 Сегодня твой день! Иди качать фрукты!", "⚠️ Осторожно на PvP-арене! Враги затаились!", "🔥 Отличный день для трейдов! Ты сделаешь выгодную сделку!", "💀 Лучше пофармить сегодня... Завтра будет сложнее.", "✨ Удача на твоей стороне! Используй это!", "🤔 Возможно, стоит сменить билд... Подумай над этим.", "🏆 Ты станешь легендой! Просто продолжай играть!"]
-    await message.answer(f"🔮 **Предсказание судьбы:**\n\n{random.choice(predictions)}", parse_mode="Markdown")
-
-@dp.message(Command("mood"))
-async def cmd_mood(message: types.Message):
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer(f"🎭 **Текущий режим:** `обычный`\n\nДоступные режимы:\n" + "\n".join([f"• `{mood}` — {desc}" for mood, desc in MOODS.items()]) + f"\n\n💡 Используй: `/mood добрый`", parse_mode="Markdown")
-        return
-    mood = parts[1].lower()
-    if mood not in MOODS:
-        await message.answer(f"❌ Такого режима нет! Доступны: {', '.join(MOODS.keys())}", parse_mode="Markdown")
-        return
-    global SYSTEM_PROMPT
-    SYSTEM_PROMPT = SYSTEM_PROMPT + f"\n\n🎭 **РЕЖИМ ОТВЕТОВ:** {MOODS[mood]}"
-    await message.answer(f"✅ **Режим сменён на:** `{mood}`\n\n{MOODS[mood]}", parse_mode="Markdown")
-
-@dp.message(Command("meme"))
-async def cmd_meme(message: types.Message):
-    await message.answer(f"😂 **Мем дня:**\n\n{random.choice(MEMES)}", parse_mode="Markdown")
-
-@dp.message(Command("roast"))
-async def cmd_roast(message: types.Message):
-    await message.answer(f"🔥 **Подкол дня:**\n\n{random.choice(ROASTS)}", parse_mode="Markdown")
-
-@dp.message(Command("luck"))
-async def cmd_luck(message: types.Message):
-    luck = random.randint(0, 100)
-    emoji = "🔥" if luck > 70 else "😅" if luck > 40 else "💀"
-    text = "Можешь идти на PvP! 🎯" if luck > 70 else "Сегодня лучше пофармить... 📊" if luck > 40 else "Сиди дома... 🏠"
-    await message.answer(f"🍀 **Твоя удача сегодня:** `{luck}%`\n\n{emoji} {text}", parse_mode="Markdown")
-
-@dp.message(Command("coin"))
-async def cmd_coin(message: types.Message):
-    await message.answer(f"🪙 **Монетка упала:** {random.choice(['Орёл 🦅', 'Решка 🪙'])}", parse_mode="Markdown")
-
-@dp.message(Command("dice"))
-async def cmd_dice(message: types.Message):
-    d1, d2 = random.randint(1, 6), random.randint(1, 6)
-    await message.answer(f"🎲 **Бросок двух кубиков:**\n\n1-й кубик: `{d1}`\n2-й кубик: `{d2}`\nСумма: `{d1 + d2}`", parse_mode="Markdown")
-
-@dp.message(Command("quote"))
-async def cmd_quote(message: types.Message):
-    await message.answer(f"💬 **Цитата дня:**\n\n{random.choice(QUOTES)}", parse_mode="Markdown")
-
-@dp.message(Command("challenge"))
-async def cmd_challenge(message: types.Message):
-    await message.answer(f"⚔️ **БОЖЕСТВЕННЫЙ ВЫЗОВ:**\n\n{random.choice(CHALLENGES)}", parse_mode="Markdown")
-
-@dp.message(Command("rps"))
-async def cmd_rps(message: types.Message):
-    choices = ["камень", "ножницы", "бумага"]
-    user_choice = message.text.replace("/rps", "").strip().lower()
-    if not user_choice or user_choice not in choices:
-        await message.answer("❓ Используй: `/rps камень` или `/rps ножницы` или `/rps бумага`", parse_mode="Markdown")
-        return
-    bot_choice = random.choice(choices)
-    if user_choice == bot_choice:
-        result = "🤝 Ничья!"
-    elif (user_choice == "камень" and bot_choice == "ножницы") or (user_choice == "ножницы" and bot_choice == "бумага") or (user_choice == "бумага" and bot_choice == "камень"):
-        result = "🎉 Ты победил!"
-    else:
-        result = "😔 Бот победил!"
-    await message.answer(f"🤖 Бот: `{bot_choice}`\n👤 Ты: `{user_choice}`\n\n**{result}**", parse_mode="Markdown")
-
-@dp.message(Command("compliment"))
-async def cmd_compliment(message: types.Message):
-    compliments = ["Ты просто космос! 🌟", "С тобой приятно общаться! 😊", "Ты настоящий геймер-легенда! 🎮", "Твой скилл впечатляет! 🔥", "Ты лучший собеседник! 💎", "У тебя отличный вкус в играх! 👌", "Ты на голову выше остальных! 🚀"]
-    await message.answer(f"💖 **Комплимент:**\n\n{random.choice(compliments)}", parse_mode="Markdown")
-
-@dp.message(Command("build"))
-async def cmd_build(message: types.Message):
-    await message.answer(random.choice(BUILDS), parse_mode="Markdown")
 
 # ==========================================
 # ОСНОВНЫЕ КОМАНДЫ
@@ -990,7 +607,23 @@ async def cmd_start(message: types.Message):
     if random.random() < 0.3:
         fruit, price, fruit_type = random.choice(FRUITS_DATA)
         bonus_text = f"\n\n🎁 **Бонус!** Ты получил случайный фрукт!\n🍎 {fruit} — {price}"
-    await message.answer(f"🎮 **Эксперт по Blox Fruits, ABA и AUT!**\n\nЗадавай вопросы по трейдам, комбухам или прокачке!\nИспользуй кнопки для быстрых запросов 👇\n\n📚 **Источники информации:**\n• Blox Fruits Wiki\n• ABA Wiki\n• AUT Wiki\n• ABA Trello (Black Magic)\n• AUT Trello (Std Dev){bonus_text}\n\n🎯 **Новые фичи:**\n• /guess — Угадай фрукт/стенд (викторина с опросом)\n• /updates — Последние обновления игр\n• /leaderboard — Таблица лидеров", parse_mode="Markdown", reply_markup=get_quick_keyboard())
+    await message.answer(
+        f"🎮 **Эксперт по Blox Fruits, ABA и AUT!**\n\n"
+        f"Задавай вопросы по трейдам, комбухам или прокачке!\n"
+        f"Используй кнопки для быстрых запросов 👇\n\n"
+        f"📚 **Источники информации:**\n"
+        f"• Blox Fruits Wiki\n"
+        f"• ABA Wiki\n"
+        f"• AUT Wiki\n"
+        f"• ABA Trello (Black Magic)\n"
+        f"• AUT Trello (Std Dev){bonus_text}\n\n"
+        f"🎯 **Новые фичи:**\n"
+        f"• /guess — Угадай фрукт/стенд (викторина с опросом)\n"
+        f"• /updates — Последние обновления игр\n"
+        f"• /leaderboard — Таблица лидеров",
+        parse_mode="Markdown",
+        reply_markup=get_quick_keyboard()
+    )
 
 @dp.message(Command("ping"))
 async def cmd_ping(message: types.Message):
@@ -1054,13 +687,10 @@ async def cmd_clear(message: types.Message):
 
 @dp.message(Command("leaderboard"))
 async def cmd_leaderboard(message: types.Message):
-    """Показывает таблицу лидеров"""
     if not LEADERBOARD:
         await message.answer("📊 Таблица лидеров пока пуста!\n\nНачни играть в /guess, чтобы заработать очки!", parse_mode="Markdown")
         return
-    
     sorted_players = sorted(LEADERBOARD.items(), key=lambda x: x[1], reverse=True)[:10]
-    
     leaderboard_text = "🏆 **ТАБЛИЦА ЛИДЕРОВ**\n\n"
     for i, (user_id, score) in enumerate(sorted_players, 1):
         try:
@@ -1068,11 +698,207 @@ async def cmd_leaderboard(message: types.Message):
             name = user.first_name or f"User_{user_id}"
         except:
             name = f"User_{user_id}"
-        
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
         leaderboard_text += f"{medal} **{name}** — {score} очков\n"
-    
     await message.answer(leaderboard_text, parse_mode="Markdown")
+
+# ==========================================
+# РАЗВЛЕКАТЕЛЬНЫЕ КОМАНДЫ
+# ==========================================
+@dp.message(Command("fruit"))
+async def cmd_fruit(message: types.Message):
+    fruit, price, fruit_type = random.choice(FRUITS_DATA)
+    await message.answer(
+        f"🍎 **Фрукт дня:** {fruit}\n\n"
+        f"💰 **Цена:** `{price}`\n"
+        f"📦 **Тип:** {fruit_type}\n"
+        f"💡 *Этот фрукт {random.choice(['сейчас в топе', 'имеет высокий спрос', 'отлично подходит для PvP', 'хорош для фарма'])}!*",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("fact"))
+async def cmd_fact(message: types.Message):
+    await message.answer(f"💡 **Случайный факт:**\n\n{random.choice(FACTS)}", parse_mode="Markdown")
+
+@dp.message(Command("quiz"))
+async def cmd_quiz(message: types.Message):
+    quiz = random.choice(QUIZ_QUESTIONS)
+    options_text = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(quiz["options"])])
+    await message.answer(
+        f"❓ **Викторина по Roblox:**\n\n"
+        f"{quiz['question']}\n\n"
+        f"{options_text}\n\n"
+        f"💡 *Ответь числом (1-{len(quiz['options'])}) в следующем сообщении!*",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("roll"))
+async def cmd_roll(message: types.Message):
+    number = random.randint(1, 100)
+    emoji = "🎲" if number < 50 else "🎯" if number < 80 else "🌟"
+    await message.answer(
+        f"{emoji} **Твой бросок:** `{number}/100`\n\n"
+        f"{'😎 Отличный результат!' if number > 80 else '👍 Неплохо!' if number > 50 else '😅 В следующий раз повезёт!'}",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("how"))
+async def cmd_how(message: types.Message):
+    predictions = [
+        "🌈 Сегодня твой день! Иди качать фрукты!",
+        "⚠️ Осторожно на PvP-арене! Враги затаились!",
+        "🔥 Отличный день для трейдов! Ты сделаешь выгодную сделку!",
+        "💀 Лучше пофармить сегодня... Завтра будет сложнее.",
+        "✨ Удача на твоей стороне! Используй это!",
+        "🤔 Возможно, стоит сменить билд... Подумай над этим.",
+        "🏆 Ты станешь легендой! Просто продолжай играть!"
+    ]
+    await message.answer(f"🔮 **Предсказание судьбы:**\n\n{random.choice(predictions)}", parse_mode="Markdown")
+
+@dp.message(Command("mood"))
+async def cmd_mood(message: types.Message):
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer(
+            f"🎭 **Текущий режим:** `обычный`\n\n"
+            f"Доступные режимы:\n" +
+            "\n".join([f"• `{mood}` — {desc}" for mood, desc in MOODS.items()]) +
+            f"\n\n💡 Используй: `/mood добрый`",
+            parse_mode="Markdown"
+        )
+        return
+    mood = parts[1].lower()
+    if mood not in MOODS:
+        await message.answer(f"❌ Такого режима нет! Доступны: {', '.join(MOODS.keys())}", parse_mode="Markdown")
+        return
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = SYSTEM_PROMPT + f"\n\n🎭 **РЕЖИМ ОТВЕТОВ:** {MOODS[mood]}"
+    await message.answer(f"✅ **Режим сменён на:** `{mood}`\n\n{MOODS[mood]}", parse_mode="Markdown")
+
+@dp.message(Command("meme"))
+async def cmd_meme(message: types.Message):
+    await message.answer(f"😂 **Мем дня:**\n\n{random.choice(MEMES)}", parse_mode="Markdown")
+
+@dp.message(Command("roast"))
+async def cmd_roast(message: types.Message):
+    await message.answer(f"🔥 **Подкол дня:**\n\n{random.choice(ROASTS)}", parse_mode="Markdown")
+
+@dp.message(Command("luck"))
+async def cmd_luck(message: types.Message):
+    luck = random.randint(0, 100)
+    emoji = "🔥" if luck > 70 else "😅" if luck > 40 else "💀"
+    text = "Можешь идти на PvP! 🎯" if luck > 70 else "Сегодня лучше пофармить... 📊" if luck > 40 else "Сиди дома... 🏠"
+    await message.answer(
+        f"🍀 **Твоя удача сегодня:** `{luck}%`\n\n{emoji} {text}",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("coin"))
+async def cmd_coin(message: types.Message):
+    await message.answer(f"🪙 **Монетка упала:** {random.choice(['Орёл 🦅', 'Решка 🪙'])}", parse_mode="Markdown")
+
+@dp.message(Command("dice"))
+async def cmd_dice(message: types.Message):
+    d1, d2 = random.randint(1, 6), random.randint(1, 6)
+    await message.answer(
+        f"🎲 **Бросок двух кубиков:**\n\n"
+        f"1-й кубик: `{d1}`\n"
+        f"2-й кубик: `{d2}`\n"
+        f"Сумма: `{d1 + d2}`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("quote"))
+async def cmd_quote(message: types.Message):
+    await message.answer(f"💬 **Цитата дня:**\n\n{random.choice(QUOTES)}", parse_mode="Markdown")
+
+@dp.message(Command("challenge"))
+async def cmd_challenge(message: types.Message):
+    await message.answer(f"⚔️ **БОЖЕСТВЕННЫЙ ВЫЗОВ:**\n\n{random.choice(CHALLENGES)}", parse_mode="Markdown")
+
+@dp.message(Command("rps"))
+async def cmd_rps(message: types.Message):
+    choices = ["камень", "ножницы", "бумага"]
+    user_choice = message.text.replace("/rps", "").strip().lower()
+    if not user_choice or user_choice not in choices:
+        await message.answer("❓ Используй: `/rps камень` или `/rps ножницы` или `/rps бумага`", parse_mode="Markdown")
+        return
+    bot_choice = random.choice(choices)
+    if user_choice == bot_choice:
+        result = "🤝 Ничья!"
+    elif (user_choice == "камень" and bot_choice == "ножницы") or (user_choice == "ножницы" and bot_choice == "бумага") or (user_choice == "бумага" and bot_choice == "камень"):
+        result = "🎉 Ты победил!"
+    else:
+        result = "😔 Бот победил!"
+    await message.answer(
+        f"🤖 Бот: `{bot_choice}`\n"
+        f"👤 Ты: `{user_choice}`\n\n"
+        f"**{result}**",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("compliment"))
+async def cmd_compliment(message: types.Message):
+    compliments = [
+        "Ты просто космос! 🌟",
+        "С тобой приятно общаться! 😊",
+        "Ты настоящий геймер-легенда! 🎮",
+        "Твой скилл впечатляет! 🔥",
+        "Ты лучший собеседник! 💎",
+        "У тебя отличный вкус в играх! 👌",
+        "Ты на голову выше остальных! 🚀"
+    ]
+    await message.answer(f"💖 **Комплимент:**\n\n{random.choice(compliments)}", parse_mode="Markdown")
+
+@dp.message(Command("build"))
+async def cmd_build(message: types.Message):
+    await message.answer(random.choice(BUILDS), parse_mode="Markdown")
+
+@dp.message(Command("guess"))
+async def cmd_guess(message: types.Message):
+    categories = ["blox_fruits", "aba", "aut"]
+    category = random.choice(categories)
+    category_names = {
+        "blox_fruits": "🍎 Blox Fruits",
+        "aba": "⚔️ ABA Персонажи",
+        "aut": "🌟 AUT Стенды"
+    }
+    items = GUESS_GAME_ITEMS[category]
+    item = random.choice(items)
+    options = [item["name"]]
+    other_items = [i for i in items if i["name"] != item["name"]]
+    random.shuffle(other_items)
+    options.extend([i["name"] for i in other_items[:3]])
+    random.shuffle(options)
+    question_text = f"🔍 **Угадай, что это за {category_names[category]}?**\n\n💡 Подсказка: {item['hint']}"
+    try:
+        await bot.send_poll(
+            chat_id=message.chat.id,
+            question=question_text,
+            options=options,
+            type="quiz",
+            correct_option_id=options.index(item["name"]),
+            is_anonymous=False,
+            explanation=f"✅ Правильный ответ: **{item['name']}**\n\n🏆 Ты получаешь +1 очко в таблицу лидеров!",
+            explanation_parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка создания опроса: {e}")
+        await message.answer("❌ Не удалось создать викторину. Попробуй позже.", reply_markup=get_quick_keyboard())
+
+@dp.message(Command("updates"))
+async def cmd_updates(message: types.Message):
+    if not update_cache:
+        await message.answer("📡 Проверяю обновления...")
+        await check_updates()
+    if not update_cache:
+        await message.answer("📡 Обновлений не найдено.", parse_mode="Markdown")
+        return
+    response = "📢 **ПОСЛЕДНИЕ ОБНОВЛЕНИЯ В ИГРАХ**\n\n"
+    for update in update_cache[:10]:
+        response += f"• **{update['game']}:** {update['text']}\n"
+    response += f"\n📖 [Подробнее на вики]({update_cache[0]['source']})"
+    await message.answer(response, parse_mode="Markdown")
 
 # ==========================================
 # АДМИН-ПАНЕЛЬ
@@ -1110,10 +936,20 @@ async def cmd_stats(message: types.Message):
     if user_ratings:
         all_ratings = [r for ratings in user_ratings.values() for r in ratings]
         avg_rating = sum(all_ratings) / len(all_ratings) if all_ratings else 0
-    
     leaderboard_size = len(LEADERBOARD)
-    
-    await message.answer(f"📊 **СТАТИСТИКА БОТА**\n\n👥 Уникальных пользователей: `{len(all_users)}`\n💬 Всего обработано запросов: `{total_requests_count}`\n🧠 Активных чатов в памяти: `{len(user_chats)}`\n⭐ Средняя оценка: `{avg_rating:.1f}/5`\n🚫 Забанено: `{len(banned_users)}`\n🔇 Замучено: `{len(muted_users)}`\n🏆 Участников лидерборда: `{leaderboard_size}`\n📦 Размер кэша вики: `{len(wiki_cache)}` страниц\n⏳ Размер кэша популярных ответов: `{len(popular_answers_cache)}` вопросов", parse_mode="Markdown")
+    await message.answer(
+        f"📊 **СТАТИСТИКА БОТА**\n\n"
+        f"👥 Уникальных пользователей: `{len(all_users)}`\n"
+        f"💬 Всего обработано запросов: `{total_requests_count}`\n"
+        f"🧠 Активных чатов в памяти: `{len(user_chats)}`\n"
+        f"⭐ Средняя оценка: `{avg_rating:.1f}/5`\n"
+        f"🚫 Забанено: `{len(banned_users)}`\n"
+        f"🔇 Замучено: `{len(muted_users)}`\n"
+        f"🏆 Участников лидерборда: `{leaderboard_size}`\n"
+        f"📦 Размер кэша вики: `{len(wiki_cache)}` страниц\n"
+        f"⏳ Размер кэша популярных ответов: `{len(popular_answers_cache)}` вопросов",
+        parse_mode="Markdown"
+    )
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
@@ -1133,7 +969,10 @@ async def cmd_broadcast(message: types.Message):
             await asyncio.sleep(0.05)
         except Exception:
             failed += 1
-    await message.answer(f"✅ **Рассылка завершена!**\nУспешно: `{success}` | Ошибок: `{failed}`", parse_mode="Markdown")
+    await message.answer(
+        f"✅ **Рассылка завершена!**\nУспешно: `{success}` | Ошибок: `{failed}`",
+        parse_mode="Markdown"
+    )
 
 @dp.message(Command("admin_check_updates"))
 async def admin_check_updates(message: types.Message):
@@ -1250,7 +1089,15 @@ async def admin_get_user(message: types.Message):
         now = time.time()
         user_timestamps = user_requests.get(user_id, [])
         recent_requests = len([t for t in user_timestamps if now - t < 60])
-        await message.answer(f"👤 **ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ**\n\n• ID: `{user_id}`\n• В истории: `{history_len}` сообщений\n• Запросов за минуту: `{recent_requests}`\n• Лимит: `{custom_limit}` запросов/мин\n• Статус: {'🚫 Забанен' if is_banned else '🔇 Замучен' if is_muted_flag else '✅ Активен'}", parse_mode="Markdown")
+        await message.answer(
+            f"👤 **ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ**\n\n"
+            f"• ID: `{user_id}`\n"
+            f"• В истории: `{history_len}` сообщений\n"
+            f"• Запросов за минуту: `{recent_requests}`\n"
+            f"• Лимит: `{custom_limit}` запросов/мин\n"
+            f"• Статус: {'🚫 Забанен' if is_banned else '🔇 Замучен' if is_muted_flag else '✅ Активен'}",
+            parse_mode="Markdown"
+        )
     except ValueError:
         await message.answer("❌ ID должен быть числом!", parse_mode="Markdown")
 
@@ -1414,7 +1261,6 @@ async def handle_user_message(message: types.Message):
     if cmd and cmd != user_text:
         await message.answer(f"⚠️ Возможно, вы имели в виду команду: `{cmd}`")
     
-    # Проверяем кэш популярных вопросов
     cached_answer = get_cached_answer(user_text)
     if cached_answer:
         await message.answer(cached_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
@@ -1448,11 +1294,8 @@ async def handle_user_message(message: types.Message):
         if response.text:
             answer = response.text[:4096]
             add_to_history(user_id, "assistant", answer)
-            
-            # Кэшируем популярные вопросы (если вопрос короткий)
             if len(user_text.split()) < 5:
                 cache_answer(user_text, answer)
-            
             if wiki_url and not ("Ошибка" in wiki_content or "не удалось" in wiki_content):
                 answer += f"\n\n📖 **Источник:** [{source_name}]({wiki_url})"
             try:
@@ -1471,14 +1314,9 @@ async def handle_user_message(message: types.Message):
 # ==========================================
 async def main():
     print("🤖 Бот запускается...")
-    
-    # Запускаем фоновый парсинг обновлений каждые 6 часов
     scheduler.add_job(check_updates, 'interval', hours=6)
     scheduler.start()
-    
-    # Первая проверка при старте
     asyncio.create_task(check_updates())
-    
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
