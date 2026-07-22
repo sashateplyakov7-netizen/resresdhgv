@@ -37,7 +37,25 @@ muted_users = {}
 user_custom_limits = {}
 last_update_check = None
 update_cache = []
-
+# ==========================================
+# ЗАГРУЗКА ПРАВИЛ ИЗ ФАЙЛА prompt_rules.md
+# ==========================================
+def load_prompt_rules():
+    """Загружает системный промпт из файла prompt_rules.md"""
+    try:
+        with open("prompt_rules.md", "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if content:
+                return content
+            else:
+                logging.warning("⚠️ Файл prompt_rules.md пуст! Использую стандартный промпт.")
+                return SYSTEM_PROMPT_DEFAULT
+    except FileNotFoundError:
+        logging.warning("⚠️ Файл prompt_rules.md не найден! Использую стандартный промпт.")
+        return SYSTEM_PROMPT_DEFAULT
+    except Exception as e:
+        logging.error(f"❌ Ошибка при чтении prompt_rules.md: {e}")
+        return SYSTEM_PROMPT_DEFAULT
 # ==========================================
 # HTTP-ЗАГЛУШКА ДЛЯ RENDER
 # ==========================================
@@ -79,12 +97,12 @@ SYSTEM_PROMPT = """
 """
 
 generation_config = {
-    "temperature": 0.1,
-    "top_p": 0.8,
+    "temperature": 0.0,
+    "top_p": 0.1,
 }
 
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-3.1-flash-lite",
     system_instruction=SYSTEM_PROMPT,
     generation_config=generation_config
 )
