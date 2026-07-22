@@ -1255,9 +1255,8 @@ async def handle_bonus(callback: types.CallbackQuery):
     else:
         text = f"💬 **Бонусная цитата:**\n{random.choice(QUOTES)}"
     await callback.message.answer(text, parse_mode="Markdown")
-
 # ==========================================
-# ОСНОВНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР
+# 🔥 ОСНОВНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР (ИСПРАВЛЕННЫЙ)
 # ==========================================
 @dp.message(F.text)
 async def handle_user_message(message: types.Message):
@@ -1279,9 +1278,15 @@ async def handle_user_message(message: types.Message):
     if cmd and cmd != user_text:
         await message.answer(f"⚠️ Возможно, вы имели в виду команду: `{cmd}`")
     
+    # Проверяем кэш популярных вопросов
     cached_answer = get_cached_answer(user_text)
     if cached_answer:
-        await message.answer(cached_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+        # ✅ ОБРЕЗАЕМ ДО БЕЗОПАСНОЙ ДЛИНЫ
+        safe_answer = cached_answer[:4000]
+        try:
+            await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+        except Exception:
+            await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         return
     
     response_type = get_response_length(user_text)
@@ -1310,23 +1315,31 @@ async def handle_user_message(message: types.Message):
     try:
         response = await asyncio.to_thread(model.generate_content, full_prompt)
         if response.text:
+            # ✅ ОБРЕЗАЕМ ОТВЕТ ДО БЕЗОПАСНОЙ ДЛИНЫ
             answer = response.text[:4096]
             add_to_history(user_id, "assistant", answer)
+            
             if len(user_text.split()) < 5:
                 cache_answer(user_text, answer)
+            
             if wiki_url and not ("Ошибка" in wiki_content or "не удалось" in wiki_content):
                 answer += f"\n\n📖 **Источник:** [{source_name}]({wiki_url})"
+            
+            # ✅ ЗАЩИТА ОТ ОШИБОК MARKDOWN
+            safe_answer = answer[:4000]  # Оставляем запас под ссылки
+            
             try:
-                await message.answer(answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+                await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
                 await message.answer("⭐ Оцени ответ:", reply_markup=get_rating_keyboard())
-            except Exception:
-                await message.answer(answer, reply_markup=get_quick_keyboard())
+            except Exception as e:
+                # Если Markdown не работает — отправляем без форматирования
+                logging.warning(f"Markdown error: {e}")
+                await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
         await message.answer("⚠️ Упсс, траблы с нейронкой. Попробуй позже.", reply_markup=get_quick_keyboard())
-
 # ==========================================
 # ЗАПУСК
 # ==========================================
