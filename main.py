@@ -1637,7 +1637,7 @@ async def handle_user_message(message: types.Message):
         else:
             await message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
        
-    rd())
+   
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
         await message.answer(
