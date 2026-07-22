@@ -166,7 +166,7 @@ if USE_OPENROUTER:
 else:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(
-        model_name="gemma-3-31b-it:free",
+        model_name="openrouter/free",
         system_instruction=SYSTEM_PROMPT,
         generation_config=generation_config
     )
