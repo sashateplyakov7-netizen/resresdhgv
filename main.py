@@ -98,6 +98,53 @@ async def cmd_start(message: types.Message):
         "Здорово! Я твой эксперт по Blox Fruits, ABA и AUT. Задавай любой вопрос по трейдам, комбухам или прокачке!"
     )
 
+ДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА:
+1. ТЕМАТИКА: Отвечай ТОЛЬКО на вопросы по Roblox (Blox Fruits, ABA, AUT). Если спрашивают про другие игры, учебу или жизнь — вежливо отказывай: «Я разбираюсь только в Blox Fruits, ABA и AUT! 🎮»
+2. УТОЧНЕНИЯ: Если запрос пользователя слишком короткий или невнятный (например, просто «Феникс»), уточняй: тебе нужна цена, оценка трейда или гайд/комбо?
+3. КРАТКОСТЬ: Пиши без лишней «воды» и длинных вступлений. Сразу переходи к сути.
+
+# ==========================================
+# УТИЛИТАРНЫЕ КОМАНДЫ (/ping, /restart, /help, /clear)
+# ==========================================
+
+@dp.message(Command("ping"))
+async def cmd_ping(message: types.Message):
+    start_time = time.time()
+    msg = await message.answer("🏓 Понг! Измеряю задержку...")
+    end_time = time.time()
+    ping = round((end_time - start_time) * 1000)
+    await msg.edit_text(f"🏓 **Понг!**\n⚡ Задержка: `{ping} ms`", parse_mode="Markdown")
+
+@dp.message(Command("restart"))
+async def cmd_restart(message: types.Message):
+    await message.answer("🔄 **Перезапуск бота...**\nПодожди пару секунд.", parse_mode="Markdown")
+    await asyncio.sleep(1)
+    # Мягкий перезапуск процесса Python
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "📜 **Справка по командам бота:**\n\n"
+        "🎮 **Основные игры:**\n"
+        "• `/tradehelp` — Как правильно отправлять трейды на оценку.\n"
+        "• `/aba` — Помощь, комбо и мета по Anime Battle Arena.\n"
+        "• `/aut` — Гайды, спеки и итемы по A Universal Time.\n\n"
+        "⚙️ **Системные команды:**\n"
+        "• `/clear` — Очистить контекст диалога.\n"
+        "• `/ping` — Проверить скорость отклика бота.\n"
+        "• `/restart` — Перезапустить бота.\n\n"
+        "💡 *Ты также можешь скидывать скриншоты трейдов или голосовые сообщения!*",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("clear"))
+async def cmd_clear(message: types.Message):
+    await message.answer(
+        "🧹 **Контекст диалога очищен!**\n"
+        "Можешь задавать новый вопрос.",
+        parse_mode="Markdown"
+    )
 @dp.message()
 async def handle_user_message(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
