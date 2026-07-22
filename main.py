@@ -128,7 +128,7 @@ generation_config = {
 
 # ✅ ИСПРАВЛЕНО: ПРАВИЛЬНАЯ МОДЕЛЬ
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",  # ✅ Рабочая модель
+    model_name="gemini-3.1-flash-lite",  # ✅ Рабочая модель
     system_instruction=SYSTEM_PROMPT,
     generation_config=generation_config
 )
