@@ -50,7 +50,7 @@ SYSTEM_PROMPT = """
 """
 
 model = genai.GenerativeModel(
-    model_name="gemini-3.5-flash",
+    model_name="gemini-3.1-flash-lite",
     system_instruction=SYSTEM_PROMPT
 )
 
