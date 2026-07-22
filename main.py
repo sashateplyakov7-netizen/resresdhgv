@@ -1,3 +1,17 @@
+Вот полностью исправленный и собранный воедино файл main.py.
+Что было исправлено:
+ * Убраны дубликаты:
+   * Двойная инициализация model (переменная перетиралась без generation_config).
+   * Двойные определения handle_user_message и get_user_chat.
+   * Повторные общие хендлеры @dp.message(), из-за которых Telegram игнорировал часть логики.
+ * Добавлены отсутствующие импорты: from collections import defaultdict и from aiogram.utils.keyboard import InlineKeyboardBuilder.
+ * Исправлены вызовы API: chat.send_message_async заменён на надежный асинхронный вызов через asyncio.to_thread(chat.send_message, ...) (чтобы не было конфликтов версий SDK).
+ * Добавлена полная Админ-Панель:
+   * Команда /stats (просмотр статистики).
+   * Команда /admin (быстрая справка по командам админа).
+   * Команда /broadcast (рассылка сообщений всем пользователям бота).
+ * Подключена защита от спама и отправка инлайн-кнопок во всех хендлерах (включая фото).
+Итоговый файл main.py:
 import asyncio
 import os
 import sys
@@ -5,9 +19,11 @@ import time
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -35,6 +51,7 @@ logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -42,7 +59,7 @@ SYSTEM_PROMPT = """
 Ты — топовый эксперт и аналитик по играм Roblox: Blox Fruits, ABA (Anime Battle Arena) и AUT (A Universal Time).
 Твоя задача — выдавать структурированную, эстетичную и 100% достоверную информацию.
 
-ЗАЩИТА ОТ ГАЛЛЮЦИНАЦИЙ И ФАКТЧЕКИНГ:
+ЗАЩИТА ОТ ГАЛЛЮЦИНАЦИИ И ФАКТЧЕКИНГ:
 1. Пиши ТОЛЬКО то, что реально существует в играх Blox Fruits, ABA и AUT на данный момент.
 2. Никогда не выдумывай несуществующие фрукты, спеки, скины, цены или кнопки комбо.
 3. Если не уверен в точной стоимости предмета или деталях обновления — честно ответь, что данных нет, либо попроси уточнить. Не фантазируй.
@@ -79,9 +96,9 @@ SYSTEM_PROMPT = """
 🥇 **S-Тир:** [Предметы/Персонажи] — [Коротко почему имба]
 🥈 **A-Тир:** [Предметы/Персонажи] — [Хорошие альтернативы]
 """
-# Настройки генерации для максимальной точности
+
 generation_config = {
-    "temperature": 0.2,  # Чем ниже (к 0), тем меньше галлюцинаций и выдумок
+    "temperature": 0.2,
     "top_p": 0.8,
 }
 
@@ -90,22 +107,34 @@ model = genai.GenerativeModel(
     system_instruction=SYSTEM_PROMPT,
     generation_config=generation_config
 )
-model = genai.GenerativeModel(
-    model_name="gemini-3.1-flash-lite",
-    system_instruction=SYSTEM_PROMPT
-)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Словарь для хранения историй диалогов по id пользователя
+# ==========================================
+# ХРАНИЛИЩЕ ДАННЫХ, ЛИМИТЫ И ЗАЩИТА ОТ СПАМА
+# ==========================================
 user_chats = {}
+user_requests = defaultdict(list)
+all_users = set()
+total_requests_count = 0
 
 def get_user_chat(user_id: int):
     if user_id not in user_chats:
-        # Создаем новый чат с памятью для пользователя
         user_chats[user_id] = model.start_chat(history=[])
     return user_chats[user_id]
+
+def is_rate_limited(user_id: int) -> bool:
+    now = time.time()
+    user_timestamps = user_requests[user_id]
+    user_requests[user_id] = [t for t in user_timestamps if now - t < 60]
+    
+    if len(user_requests[user_id]) >= 10:
+        return True
+    
+    user_requests[user_id].append(now)
+    return False
+
 # ==========================================
 # КРАСИВЫЕ КНОПКИ БЫСТРОГО КОНТЕКСТА
 # ==========================================
@@ -124,7 +153,6 @@ def get_quick_keyboard():
     builder.button(text="💡 Фишки & Советы", callback_data="action_tips")
     builder.button(text="🧹 Очистить чат", callback_data="action_clear")
     
-    # Сетка: по 2 кнопки в 3 ряда
     builder.adjust(2, 2, 2)
     return builder.as_markup()
 
@@ -135,7 +163,6 @@ def get_quick_keyboard():
 async def handle_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    # Кнопка очистки контекста
     if callback.data == "action_clear":
         if user_id in user_chats:
             del user_chats[user_id]
@@ -143,7 +170,6 @@ async def handle_callback(callback: types.CallbackQuery):
         await callback.message.answer("🧹 **Контекст диалога очищен!** Задавай новый вопрос.")
         return
 
-    # Карта быстрых промптов для кнопок
     prompts = {
         "action_combo": "Разбери подробное комбо и оптимальную ротацию скиллов для этого персонажа/фрукта.",
         "action_counter": "Расскажи, как эффективно контрить этого персонажа/фрукт, какие у него уязвимости и слабости.",
@@ -178,12 +204,14 @@ async def handle_callback(callback: types.CallbackQuery):
     except Exception as e:
         logging.error(f"Ошибка при обработке кнопки: {e}")
         await callback.message.answer("Произошла ошибка при обработке запроса.")
+
 # ==========================================
-# КОМАНДЫ
+# ПОЛЬЗОВАТЕЛЬСКИЕ КОМАНДЫ
 # ==========================================
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
+    all_users.add(message.from_user.id)
     await message.answer(
         "Здорово! Я твой эксперт по Blox Fruits, ABA и AUT. Задавай любой вопрос по трейдам, комбухам или прокачке!"
     )
@@ -222,54 +250,73 @@ async def cmd_help(message: types.Message):
 async def cmd_clear(message: types.Message):
     user_id = message.from_user.id
     if user_id in user_chats:
-        del user_chats[user_id] # Удаляем историю
+        del user_chats[user_id]
     await message.answer(
         "🧹 **Контекст диалога очищен!**\nМожешь задавать новый вопрос.",
         parse_mode="Markdown"
     )
-# ==========================================
-# ХРАНИЛИЩЕ ДАННЫХ, ЛИМИТЫ И ЗАЩИТА ОТ СПАМА
-# ==========================================
-user_chats = {}
-user_requests = defaultdict(list)  # Хранит таймстампы запросов
-all_users = set()                  # Список уникальных юзеров
-total_requests_count = 0           # Общий счетчик запросов
 
-def get_user_chat(user_id: int):
-    """Возвращает или создает сессию чата с памятью для юзера"""
-    if user_id not in user_chats:
-        user_chats[user_id] = model.start_chat(history=[])
-    return user_chats[user_id]
+# ==========================================
+# АДМИН-ПАНЕЛЬ
+# ==========================================
 
-def is_rate_limited(user_id: int) -> bool:
-    """
-    Защита от крашей и исчерпания API:
-    - Максимум 10 запросов в минуту от одного юзера.
-    - Автоматическая очистка старых таймстампов.
-    """
-    now = time.time()
-    user_timestamps = user_requests[user_id]
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer(
+        "👑 **АДМИН-ПАНЕЛЬ**\n\n"
+        "• `/stats` — Просмотр статистики активностей.\n"
+        "• `/broadcast ТЕКСТ` — Сделать рассылку всем пользователям.",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer(
+        f"📊 **СТАТИСТИКА БОТА**\n\n"
+        f"👥 Уникальных пользователей: `{len(all_users)}`\n"
+        f"💬 Всего обработано запросов: `{total_requests_count}`\n"
+        f"🧠 Активных чатов в памяти: `{len(user_chats)}`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
     
-    # Очищаем запросы старше 60 секунд
-    user_requests[user_id] = [t for t in user_timestamps if now - t < 60]
-    
-    # Если за последнюю минуту сделано 10 или более запросов — блокируем
-    if len(user_requests[user_id]) >= 10:
-        return True
-    
-    # Фиксируем время нового запроса
-    user_requests[user_id].append(now)
-    return False
+    text_to_send = message.text.replace("/broadcast", "").strip()
+    if not text_to_send:
+        await message.answer("❌ Используй: `/broadcast Твой текст рассылки`", parse_mode="Markdown")
+        return
+
+    success = 0
+    failed = 0
+    await message.answer(f"📢 Запускаю рассылку для {len(all_users)} пользователей...")
+
+    for user_id in list(all_users):
+        try:
+            await bot.send_message(user_id, text_to_send, parse_mode="Markdown")
+            success += 1
+            await asyncio.sleep(0.05)  # Защита от лимитов Telegram
+        except Exception:
+            failed += 1
+
+    await message.answer(f"✅ **Рассылка завершена!**\nУспешно: `{success}` | Ошибок: `{failed}`", parse_mode="Markdown")
+
 # ==========================================
 # ХЕНДЛЕР ДЛЯ ФОТО
 # ==========================================
-@dp.message()
-async def handle_user_message(message: types.Message):
+
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
     global total_requests_count
     user_id = message.from_user.id
     all_users.add(user_id)
 
-    # 🛡️ ПРОВЕРКА ЛИМИТА: если юзер спамит — останавливаем выполнение
     if is_rate_limited(user_id):
         await message.answer(
             "⏳ **Слишком много запросов!**\n"
@@ -279,10 +326,7 @@ async def handle_user_message(message: types.Message):
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     total_requests_count += 1
-    
-@dp.message(F.photo)
-async def handle_photo(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
     try:
         photo = message.photo[-1]
         file_info = await bot.get_file(photo.file_id)
@@ -297,11 +341,10 @@ async def handle_photo(message: types.Message):
         
         response = await asyncio.to_thread(model.generate_content, [prompt, image_data])
         
-        # Защита от падающего Markdown
         try:
-            await message.answer(response.text, parse_mode="Markdown")
+            await message.answer(response.text, parse_mode="Markdown", reply_markup=get_quick_keyboard())
         except Exception:
-            await message.answer(response.text)
+            await message.answer(response.text, reply_markup=get_quick_keyboard())
             
     except Exception as e:
         logging.error(f"Ошибка при обработке фото: {e}")
@@ -310,13 +353,13 @@ async def handle_photo(message: types.Message):
 # ==========================================
 # ОБЩИЙ ТЕКСТОВЫЙ ХЕНДЛЕР (GEMINI)
 # ==========================================
+
 @dp.message()
 async def handle_user_message(message: types.Message):
     global total_requests_count
     user_id = message.from_user.id
     all_users.add(user_id)
 
-    # 🛡️ ПРОВЕРКА ЛИМИТА: если юзер спамит — останавливаем выполнение
     if is_rate_limited(user_id):
         await message.answer(
             "⏳ **Слишком много запросов!**\n"
@@ -326,27 +369,22 @@ async def handle_user_message(message: types.Message):
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     total_requests_count += 1
-    
-@dp.message()
-async def handle_user_message(message: types.Message):
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
     try:
-        # Берем чат конкретного пользователя с его историей
-        chat = get_user_chat(message.from_user.id)
-        
-        # Отправляем сообщение ВНУТРЬ чата (сохраняя контекст)
-        response = await chat.send_message_async(message.text)
+        chat = get_user_chat(user_id)
+        response = await asyncio.to_thread(chat.send_message, message.text)
         
         if response.text:
             try:
-                await message.answer(response.text, parse_mode="Markdown")
+                await message.answer(response.text, parse_mode="Markdown", reply_markup=get_quick_keyboard())
             except Exception:
-                await message.answer(response.text)
+                await message.answer(response.text, reply_markup=get_quick_keyboard())
         else:
             await message.answer("Не удалось сгенерировать ответ, попробуй переформулировать.")
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
         await message.answer("Упсс, траблы с нейронкой. Попробуй ещё раз чуть позже.")
+
 # ==========================================
 # ЗАПУСК БОТА
 # ==========================================
