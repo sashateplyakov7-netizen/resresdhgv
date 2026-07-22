@@ -232,7 +232,7 @@ def search_all_wikis(query: str) -> list:
     ]
     for source in sources:
         try:
-            response = requests.get(source["url"], timeout=5)
+            response = requests.get(source["url"], timeout=3)
             if response.status_code == 200:
                 results.append({"name": source["name"], "url": source["url"], "status": "found"})
             else:
@@ -255,7 +255,7 @@ async def check_updates():
     new_updates = []
     for game_name, url in games.items():
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=3)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "html.parser")
                 recent_changes = soup.find_all("div", class_="recent-changes")
@@ -434,7 +434,7 @@ def fetch_wiki_page(url: str) -> str:
         )
     }
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=3)
         if response.status_code != 200:
             return f"Ошибка: не удалось открыть страницу (код {response.status_code})"
         soup = BeautifulSoup(response.text, "html.parser")
@@ -523,7 +523,7 @@ def search_wiki_for_query(query: str) -> tuple[str | None, str | None]:
             for variant in [keyword.capitalize(), keyword.title(), keyword.upper(), keyword.lower()]:
                 potential_url = base_url + variant
                 try:
-                    response = requests.get(potential_url, timeout=5)
+                    response = requests.get(potential_url, timeout=3)
                     if response.status_code == 200:
                         return potential_url, source_name
                 except:
