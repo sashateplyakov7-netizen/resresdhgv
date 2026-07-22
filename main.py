@@ -222,12 +222,8 @@ def search_all_wikis(query: str) -> list:
     results = []
     sources = [
         {"name": "Blox Fruits Wiki", "url": f"https://blox-fruits.fandom.com/wiki/{query.replace(' ', '_')}"},
-        {"name": "Blox Fruits Wiki (RU)", "url": f"https://blox-fruits.fandom.com/ru/wiki/{query.replace(' ', '_')}"},
         {"name": "ABA Wiki", "url": f"https://roblox-anime-battle-arena.fandom.com/wiki/{query.replace(' ', '_')}"},
-        {"name": "ABA Wiki (RU)", "url": f"https://roblox-anime-battle-arena.fandom.com/ru/wiki/{query.replace(' ', '_')}"},
         {"name": "AUT Wiki", "url": f"https://a-universal-time.fandom.com/wiki/{query.replace(' ', '_')}"},
-        {"name": "AUT Wiki (RU)", "url": f"https://a-universal-time.fandom.com/ru/wiki/{query.replace(' ', '_')}"},
-        {"name": "ABA Trello", "url": "https://trello.com/b/QBw7fnXX/black-magic-aba"},
         {"name": "AUT Trello", "url": "https://trello.com/b/XbM1pdjU/a-universal-time-aut"}
     ]
     for source in sources:
