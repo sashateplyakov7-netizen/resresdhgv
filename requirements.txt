@@ -4,3 +4,4 @@ python-dotenv
 aiohttp
 beautifulSoup4
 requests
+apscheduler
