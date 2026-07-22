@@ -156,10 +156,14 @@ async def handle_photo(message: types.Message):
         prompt = message.caption or "Проанализируй этот скриншот по Roblox (Blox Fruits / ABA / AUT) и дай разбор."
         
         response = await asyncio.to_thread(model.generate_content, [prompt, image_data])
+        
+        # Защита от падающего Markdown
         try:
-    await message.answer(response.text, parse_mode="Markdown")
-except Exception:
-    await message.answer(response.text)
+            await message.answer(response.text, parse_mode="Markdown")
+        except Exception:
+            await message.answer(response.text)
+            
+    except Exception as e:
         logging.error(f"Ошибка при обработке фото: {e}")
         await message.answer("Не удалось прочитать картинку, попробуй скинуть в более четком качестве.")
 
@@ -173,8 +177,12 @@ async def handle_user_message(message: types.Message):
     try:
         response = await asyncio.to_thread(model.generate_content, message.text)
         if response.text:
-            await message.answer(response.text, parse_mode="Markdown")
-except Exception:
+            # Защита от падающего Markdown
+            try:
+                await message.answer(response.text, parse_mode="Markdown")
+            except Exception:
+                await message.answer(response.text)
+        else:
             await message.answer("Не удалось сгенерировать ответ, попробуй переформулировать.")
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
