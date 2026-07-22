@@ -1,22 +1,42 @@
 import asyncio
 import os
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# Загружаем ключи из .env
+# ==========================================
+# МИКРО-СЕРВЕР ДЛЯ RENDER (чтобы не килял за отсутствие порта)
+# ==========================================
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+# Запускаем веб-заглушку в фоновом потоке ДО бота
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# ==========================================
+# ОСНОВНОЙ КОД БОТА
+# ==========================================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Настраиваем бесплатный API Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ТВОЙ СИСТЕМНЫЙ ПРОМПТ
 SYSTEM_PROMPT = """
 Ты — ультимативный ИИ-помощник, эксперт и топ-трейдер по играм Blox Fruits, ABA (Anime Battle Arena) и AUT (A Universal Time) в Roblox. Твоя цель — помогать игрокам с гайдами, прокачкой, комбо и оценкой трейдов.
 
@@ -29,7 +49,6 @@ SYSTEM_PROMPT = """
 Стиль общения: Общайся как опытный, но дружелюбный геймер. Используй сленг (мувсет, баф, нерф, спавн, велью, трейд, W/L, плейс). Пиши коротко, емко и по делу, без лишней "воды" и длинных вступлений. Если игрок просит комбо, расписывай его по кнопкам или скиллам пошагово.
 """
 
-# Инициализируем модель с встроенной ролью
 model = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     system_instruction=SYSTEM_PROMPT
@@ -46,11 +65,9 @@ async def cmd_start(message: types.Message):
 
 @dp.message()
 async def handle_user_message(message: types.Message):
-    # Показываем статус "печатает..." в чате
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     try:
-        # Отправляем текст юзера в нейросеть
         response = await asyncio.to_thread(model.generate_content, message.text)
         
         if response.text:
@@ -68,21 +85,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-# Временный заглушка-сервер для Render
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
-
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    server.serve_forever()
-
-# Запускаем сервер в отдельном потоке
-threading.Thread(target=run_dummy_server, daemon=True).start()
