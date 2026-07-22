@@ -1,7 +1,4 @@
-Flask
-requests
-gunicorn
-google-generativeai
 aiogram>=3.0.0
-yt-dlp
+google-generativeai
+python-dotenv
 aiohttp
