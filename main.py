@@ -1636,19 +1636,20 @@ async def handle_user_message(message: types.Message):
                 await message.answer(safe_answer, reply_markup=get_quick_keyboard())
         else:
             await message.answer("❌ Не удалось сгенерировать ответ.", reply_markup=get_quick_keyboard())
-        )  
-except Exception as e:
-    logging.error(f"Ошибка Gemini API: {e}")
-    await message.answer(
-        f"⚠️ **Ошибка при обработке запроса**\n\n"
-        f"📋 **Что случилось:** {str(e)[:100]}\n\n"
-        f"💡 **Попробуй:**\n"
-        f"• Переформулировать вопрос\n"
-        f"• Использовать кнопки\n"
-        f"• Написать позже",
-        parse_mode="Markdown",
-        reply_markup=get_quick_keyboard()
-    )
+       
+    rd())
+    except Exception as e:
+        logging.error(f"Ошибка Gemini API: {e}")
+        await message.answer(
+            f"⚠️ **Ошибка при обработке запроса**\n\n"
+            f"📋 **Что случилось:** {str(e)[:100]}\n\n"
+            f"💡 **Попробуй:**\n"
+            f"• Переформулировать вопрос\n"
+            f"• Использовать кнопки\n"
+            f"• Написать позже",
+            parse_mode="Markdown",
+            reply_markup=get_quick_keyboard()
+        )
 # ==========================================
 # ЗАПУСК
 # ==========================================
