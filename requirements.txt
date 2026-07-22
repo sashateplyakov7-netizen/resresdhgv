@@ -5,3 +5,4 @@ aiohttp
 beautifulSoup4
 requests
 apscheduler
+openai
