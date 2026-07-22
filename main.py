@@ -1340,6 +1340,16 @@ async def handle_user_message(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
         await message.answer("⚠️ Упсс, траблы с нейронкой. Попробуй позже.", reply_markup=get_quick_keyboard())
+        # ✅ ОБРЕЗАЕМ ДО БЕЗОПАСНОЙ ДЛИНЫ
+safe_answer = answer[:4000]
+
+try:
+    await message.answer(safe_answer, parse_mode="Markdown", reply_markup=get_quick_keyboard())
+    await message.answer("⭐ Оцени ответ:", reply_markup=get_rating_keyboard())
+except Exception as e:
+    # Если Markdown не работает — отправляем без форматирования
+    logging.warning(f"Markdown error: {e}")
+    await message.answer(safe_answer, reply_markup=get_quick_keyboard())
 # ==========================================
 # ЗАПУСК
 # ==========================================
