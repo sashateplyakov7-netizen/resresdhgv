@@ -1,74 +1,68 @@
 import asyncio
 import os
-import re
 import logging
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from aiogram.types import FSInputFile
-from supabase import create_client, Client
 from dotenv import load_dotenv
+import google.generativeai as genai
 
-from downloader import download_tiktok
-
-# Грузим переменные окружения из .env
+# Загружаем ключи из .env
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Инициализация Supabase и бота
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Настраиваем бесплатный API Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+
+# ТВОЙ СИСТЕМНЫЙ ПРОМПТ
+SYSTEM_PROMPT = """
+Ты — ультимативный ИИ-помощник, эксперт и топ-трейдер по играм Blox Fruits, ABA (Anime Battle Arena) и AUT (A Universal Time) в Roblox. Твоя цель — помогать игрокам с гайдами, прокачкой, комбо и оценкой трейдов.
+
+Твои главные обязанности:
+1. По Blox Fruits: Ты знаешь актуальную ценность (Value) всех фруктов и геймпассов, тир-листы, как получить V4 расы, где фармить левелы, какие мечи/стили боя сейчас в мета-комбо. Помогаешь пользователям понять, выгоден ли их трейд (например: "Стоит ли менять Леопарда на Дракона?").
+2. По ABA: Ты досконально знаешь персонажей, их мувсеты, ульты, тактики против разных героев и лучшие комбо (включая true-комбо и бреки). Помогаешь поднимать ранг.
+3. По AUT: Ты шаришь в получении редких стендов/абилок (Specs), квестах, ценности скинов и предметов для обмена.
+4. Трейдинг: Когда тебя спрашивают про обмен (L или W - Loss или Win), ты должен детально анализировать ценность предметов на текущий момент и давать четкий вердикт.
+
+Стиль общения: Общайся как опытный, но дружелюбный геймер. Используй сленг (мувсет, баф, нерф, спавн, велью, трейд, W/L, плейс). Пиши коротко, емко и по делу, без лишней "воды" и длинных вступлений. Если игрок просит комбо, расписывай его по кнопкам или скиллам пошагово.
+"""
+
+# Инициализируем модель с встроенной ролью
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    system_instruction=SYSTEM_PROMPT
+)
+
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Регулярка для отлова ссылок на TikTok
-TIKTOK_RE = r"https?://(?:www\.|vt\.|vm\.)?tiktok\.com/[^\s]+"
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    username = message.from_user.username or "Unknown"
+    await message.answer(
+        "Здорово! Я твой эксперт по Blox Fruits, ABA и AUT. Задавай любой вопрос по трейдам, комбухам или прокачке!"
+    )
+
+@dp.message()
+async def handle_user_message(message: types.Message):
+    # Показываем статус "печатает..." в чате
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
-    # Записываем юзера в Supabase (в таблицу 'users')
     try:
-        supabase.table("users").upsert({"telegram_id": user_id, "username": username}).execute()
-    except Exception as e:
-        logging.error(f"Ошибка БД: {e}")
-
-    await message.answer("Скинь ссылку на TikTok, и я пришлю видео без ватермарки.")
-
-@dp.message(F.text.regexp(TIKTOK_RE))
-async def handle_tiktok_link(message: types.Message):
-    # Достаем ссылку из текста
-    match = re.search(TIKTOK_RE, message.text)
-    tt_url = match.group(0)
-    
-    status_msg = await message.answer("⏳ Качаю видео...")
-
-    try:
-        # Вызываем функцию из downloader.py
-        file_path = await download_tiktok(tt_url)
+        # Отправляем текст юзера в нейросеть
+        response = await asyncio.to_thread(model.generate_content, message.text)
         
-        if file_path and os.path.exists(file_path):
-            video_file = FSInputFile(file_path)
-            await message.answer_video(video=video_file)
-            
-            # Удаляем видео с сервера, чтобы не забить память на Render
-            os.remove(file_path)
-            await status_msg.delete()
+        if response.text:
+            await message.answer(response.text)
         else:
-            await status_msg.edit_text("❌ Не удалось скачать. Проверь ссылку.")
-
+            await message.answer("Не удалось сгенерировать ответ, попробуй переформулировать.")
+            
     except Exception as e:
-        logging.error(f"Ошибка скачивания: {e}")
-        await status_msg.edit_text("❌ Ошибка при обработке.")
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
+        logging.error(f"Ошибка Gemini API: {e}")
+        await message.answer("Упсс, траблы с нейронкой. Попробуй ещё раз чуть позже.")
 
 async def main():
-    # Дропаем вебхуки и запускаем Long Polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
