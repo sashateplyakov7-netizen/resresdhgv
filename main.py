@@ -98,6 +98,14 @@ model = genai.GenerativeModel(
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
+# Словарь для хранения историй диалогов по id пользователя
+user_chats = {}
+
+def get_user_chat(user_id: int):
+    if user_id not in user_chats:
+        # Создаем новый чат с памятью для пользователя
+        user_chats[user_id] = model.start_chat(history=[])
+    return user_chats[user_id]
 # ==========================================
 # КОМАНДЫ
 # ==========================================
@@ -140,9 +148,11 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("clear"))
 async def cmd_clear(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in user_chats:
+        del user_chats[user_id] # Удаляем историю
     await message.answer(
-        "🧹 **Контекст диалога очищен!**\n"
-        "Можешь задавать новый вопрос.",
+        "🧹 **Контекст диалога очищен!**\nМожешь задавать новый вопрос.",
         parse_mode="Markdown"
     )
 
@@ -185,9 +195,13 @@ async def handle_photo(message: types.Message):
 async def handle_user_message(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     try:
-        response = await asyncio.to_thread(model.generate_content, message.text)
+        # Берем чат конкретного пользователя с его историей
+        chat = get_user_chat(message.from_user.id)
+        
+        # Отправляем сообщение ВНУТРЬ чата (сохраняя контекст)
+        response = await chat.send_message_async(message.text)
+        
         if response.text:
-            # Защита от падающего Markdown
             try:
                 await message.answer(response.text, parse_mode="Markdown")
             except Exception:
@@ -197,7 +211,6 @@ async def handle_user_message(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка Gemini API: {e}")
         await message.answer("Упсс, траблы с нейронкой. Попробуй ещё раз чуть позже.")
-
 # ==========================================
 # ЗАПУСК БОТА
 # ==========================================
